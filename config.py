@@ -7,14 +7,14 @@ if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
 
 # Intermediate and final file names
-default_consolidated_csv = os.path.join(OUTPUT_DIR, "Consolidated_Output.csv")
-default_consolidated_excel = os.path.join(OUTPUT_DIR, "Consolidated_Output.xlsx")
-RAW_OUTPUT_FILE = os.path.join(OUTPUT_DIR, "APIResponseRaw.csv")
-API_RESPONSE_FILE = os.path.join(OUTPUT_DIR, "APIResponse.csv")
-API_ERROR_LOG_FILE = os.path.join(OUTPUT_DIR, "APIError.log")
-SCRIPT_ERROR_LOG_FILE = os.path.join(OUTPUT_DIR, "ScriptError.log")
-PROCESSED_TRACKING_FILE = os.path.join(OUTPUT_DIR, "CasesProcessed.txt")
-API_401_ERROR_TRACKING_FILE = os.path.join(OUTPUT_DIR, "API401Errors.txt")
+default_consolidated_csv = os.path.join(OUTPUT_DIR, "")#Consolidated_Output.csv
+default_consolidated_excel = os.path.join(OUTPUT_DIR, "")#Consolidated_Output.xlsx
+RAW_OUTPUT_FILE = os.path.join(OUTPUT_DIR, "")#APIResponseRaw.csv
+API_RESPONSE_FILE = os.path.join(OUTPUT_DIR, "")#APIResponse.csv
+API_ERROR_LOG_FILE = os.path.join(OUTPUT_DIR, "")#APIResponse.csv
+SCRIPT_ERROR_LOG_FILE = os.path.join(OUTPUT_DIR, "")#ScriptError.log
+PROCESSED_TRACKING_FILE = os.path.join(OUTPUT_DIR, "")#CasesProcessed.txt
+API_401_ERROR_TRACKING_FILE = os.path.join(OUTPUT_DIR, "")#API401Errors.txt
 
 # API and MSAL configuration
 apiUrl = ''#'Your api URL goes here'

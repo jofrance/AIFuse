@@ -13,21 +13,21 @@ def validate_config():
     missing = []
     if not config.OUTPUT_DIR:
         missing.append("OUTPUT_DIR")
-    if not config.default_consolidated_csv:
+    if not os.path.basename(config.default_consolidated_csv):
         missing.append("default_consolidated_csv")
-    if not config.default_consolidated_excel:
+    if not os.path.basename(config.default_consolidated_excel):
         missing.append("default_consolidated_excel")
-    if not config.RAW_OUTPUT_FILE:
+    if not os.path.basename(config.RAW_OUTPUT_FILE):
         missing.append("RAW_OUTPUT_FILE")
-    if not config.API_RESPONSE_FILE:
+    if not os.path.basename(config.API_RESPONSE_FILE):
         missing.append("API_RESPONSE_FILE")
-    if not config.API_ERROR_LOG_FILE:
+    if not os.path.basename(config.API_ERROR_LOG_FILE):
         missing.append("API_ERROR_LOG_FILE")
-    if not config.SCRIPT_ERROR_LOG_FILE:
+    if not os.path.basename(config.SCRIPT_ERROR_LOG_FILE):
         missing.append("SCRIPT_ERROR_LOG_FILE")
-    if not config.PROCESSED_TRACKING_FILE:
+    if not os.path.basename(config.PROCESSED_TRACKING_FILE):
         missing.append("PROCESSED_TRACKING_FILE")
-    if not config.API_401_ERROR_TRACKING_FILE:
+    if not os.path.basename(config.API_401_ERROR_TRACKING_FILE):
         missing.append("API_401_ERROR_TRACKING_FILE")
     if not config.apiUrl:
         missing.append("apiUrl")
