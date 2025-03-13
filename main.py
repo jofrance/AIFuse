@@ -9,6 +9,43 @@ import consolidation
 import utils
 import curses
 
+def validate_config():
+    missing = []
+    if not config.OUTPUT_DIR:
+        missing.append("OUTPUT_DIR")
+    if not config.default_consolidated_csv:
+        missing.append("default_consolidated_csv")
+    if not config.default_consolidated_excel:
+        missing.append("default_consolidated_excel")
+    if not config.RAW_OUTPUT_FILE:
+        missing.append("RAW_OUTPUT_FILE")
+    if not config.API_RESPONSE_FILE:
+        missing.append("API_RESPONSE_FILE")
+    if not config.API_ERROR_LOG_FILE:
+        missing.append("API_ERROR_LOG_FILE")
+    if not config.SCRIPT_ERROR_LOG_FILE:
+        missing.append("SCRIPT_ERROR_LOG_FILE")
+    if not config.PROCESSED_TRACKING_FILE:
+        missing.append("PROCESSED_TRACKING_FILE")
+    if not config.API_401_ERROR_TRACKING_FILE:
+        missing.append("API_401_ERROR_TRACKING_FILE")
+    if not config.apiUrl:
+        missing.append("apiUrl")
+    if not config.experimentId:
+        missing.append("experimentId")
+    if not config.API_TIMEOUT:
+        missing.append("API_TIMEOUT")
+    if not config.client_id:
+        missing.append("client_id")
+    if not config.authority:
+        missing.append("authority")
+    if not config.scopes:
+        missing.append("scopes")		
+    if missing:
+        print(f"Configuration error: The following configuration values are missing or empty: {', '.join(missing)}")
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Integrated API processing and consolidation tool")
     parser.add_argument("input", help="Input JSON file with one case per line")
@@ -49,5 +86,6 @@ def main():
     print("Consolidation phase complete.")
 
 if __name__ == "__main__":
+    validate_config()
     main()
 
