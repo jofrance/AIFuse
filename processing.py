@@ -372,9 +372,10 @@ def curses_main(stdscr):
         stdscr.refresh()
         time.sleep(0.1)
     stdscr.nodelay(False)
-    stdscr.move(25, 0)
+    max_y, max_x = stdscr.getmaxyx()
+    stdscr.move(max_y - 1, 0)
     stdscr.clrtoeol()
-    stdscr.addstr(25, 0, "Processing complete! Press Enter to exit.")
+    stdscr.addstr(max_y - 1, 0, "Processing complete! Press Enter to exit.")
     stdscr.refresh()
     while True:
         key = stdscr.getch()
