@@ -1,6 +1,6 @@
-from msal import PublicClientApplication
 import time
 import threading
+from msal import PublicClientApplication
 import config
 
 scopes=config.scopes
@@ -10,7 +10,8 @@ def get_access_token():
     if config.msal_app is None:
         config.msal_app = PublicClientApplication(
             client_id = config.client_id,
-            authority = config.authority
+            authority = config.authority,
+            #enable_broker_on_windows=True
         )
     accounts = config.msal_app.get_accounts()
     result = None

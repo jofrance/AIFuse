@@ -2,12 +2,12 @@
 import argparse
 import sys
 import os
+import platform
 import config
 import auth
 import processing
 import consolidation
 import utils
-import curses
 
 def validate_config():
     missing = []
@@ -40,13 +40,13 @@ def validate_config():
     if not config.authority:
         missing.append("authority")
     if not config.scopes:
-        missing.append("scopes")		
+        missing.append("scopes")
     if missing:
         print(f"Configuration error: The following configuration values are missing or empty: {', '.join(missing)}")
         sys.exit(1)
 
-
 def main():
+    # Set up argument parsing.
     parser = argparse.ArgumentParser(description="Integrated API processing and consolidation tool")
     parser.add_argument("input", help="Input JSON file with one case per line")
     parser.add_argument("-t", "--threads", type=int, default=0,
@@ -58,16 +58,48 @@ def main():
     parser.add_argument("--consolidated-excel", default=config.default_consolidated_excel,
                         help="Output consolidated Excel file")
     parser.add_argument("--no-ui", action="store_true",
-                        help="Disable curses UI and run processing in plain console mode")
+                        help="Disable UI and run processing in plain console mode")
+    parser.add_argument("--with-curses", action="store_true",
+                        help="Force using curses UI even on Windows")
     config.ARGS = parser.parse_args()
 
-    # Processing Phase
+    # Decide which UI to launch based on arguments and OS.
     if config.ARGS.no_ui:
         processing.processing_main()
+    elif config.ARGS.with_curses:
+        try:
+            import curses
+            curses.wrapper(processing.curses_main)
+        except Exception as e:
+            print(f"Curses UI error: {e}")
+            print("Falling back to plain console mode.")
+            processing.processing_main()
     else:
-        curses.wrapper(processing.curses_main)
+        system = platform.system()
+        if system == "Windows":
+            try:
+                from win_ui import tk_ui_main
+                tk_ui_main()
+            except Exception as e:
+                print(f"Error launching Tkinter UI: {e}")
+                print("Falling back to curses UI on Windows.")
+                try:
+                    import curses
+                    curses.wrapper(processing.curses_main)
+                except Exception as e:
+                    print(f"Curses UI error: {e}")
+                    print("Falling back to plain console mode.")
+                    processing.processing_main()
+        else:
+            try:
+                import curses
+                curses.wrapper(processing.curses_main)
+            except Exception as e:
+                print(f"Curses UI error: {e}")
+                print("Falling back to plain console mode.")
+                processing.processing_main()
 
-    # Consolidation Phase
+    # Consolidation Phase (runs after UI completes).
     print("\nStarting consolidation phase...")
     original_file = config.ARGS.input
     original_cases = consolidation.load_original_cases(original_file)
@@ -88,4 +120,3 @@ def main():
 if __name__ == "__main__":
     validate_config()
     main()
-

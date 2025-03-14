@@ -13,6 +13,7 @@ from threading import Semaphore
 
 import config
 from auth import get_access_token, refresh_token
+import utils  # Import the shared utilities (which now contains check_resume_status)
 
 # --- Tracking File Functions ---
 def load_processed_cases():
@@ -49,48 +50,65 @@ def clear_401_tracking_file():
 
 # --- Curses Prompt for Resume/Start Fresh ---
 def check_resume_option(stdscr):
-    if os.path.exists(config.PROCESSED_TRACKING_FILE):
-        stdscr.clear()
-        stdscr.addstr(0, 0, "Previous run detected.")
-        processed = load_processed_cases()
-        try:
-            with open(config.ARGS.input, 'r') as f:
-                total_input = sum(1 for line in f if line.strip())
-        except Exception:
-            total_input = "unknown"
-        stdscr.addstr(1, 0, f"Processed cases: {len(processed)}. Total input cases: {total_input}.")
-        stdscr.addstr(2, 0, "Press 'R' to resume processing remaining cases, or 'S' to start fresh:")
-        stdscr.refresh()
-        while True:
-            key = stdscr.getch()
-            if key in (ord('r'), ord('R')):
-                config.resume_mode = True
-                break
-            elif key in (ord('s'), ord('S')):
-                config.resume_mode = False
-                break
-        stdscr.addstr(3, 0, f"User selected: {'RESUME' if config.resume_mode else 'START FRESH'}.")
-        stdscr.refresh()
-        time.sleep(2)
-        if config.resume_mode and os.path.exists(config.API_401_ERROR_TRACKING_FILE):
-            with open(config.API_401_ERROR_TRACKING_FILE, 'r') as f:
-                retry_lines = [line.strip() for line in f if line.strip()]
-            if retry_lines:
-                stdscr.addstr(4, 0, f"There are {len(retry_lines)} cases with persistent 401 errors.")
-                stdscr.addstr(5, 0, "Press 'R' to retry these 401 errors, or 'S' to skip them:")
-                stdscr.refresh()
-                while True:
-                    key = stdscr.getch()
-                    if key in (ord('r'), ord('R')):
-                        config.retry_401_flag = True
-                        break
-                    elif key in (ord('s'), ord('S')):
-                        config.retry_401_flag = False
-                        break
-                stdscr.addstr(6, 0, f"User selected: {'Retry 401 errors' if config.retry_401_flag else 'Skip 401 errors'}.")
-                stdscr.refresh()
-                time.sleep(2)
+    """
+    Uses the shared check_resume_status() function (from utils.py) to determine if there is resume data.
+    If the tracking file exists and has processed cases:
+       - If all cases are processed, displays a message and exits.
+       - Otherwise, prompts the user to resume or start fresh.
+    If the tracking file is missing or empty, sets resume_mode to False.
+    """
+    status = utils.check_resume_status()
+    total_input = status["total_input"]
+    processed_count = status["processed_count"]
+
+    # Only consider prompting if the tracking file exists and contains some data.
+    if os.path.exists(config.PROCESSED_TRACKING_FILE) and processed_count > 0:
+        if processed_count >= total_input:
+            stdscr.clear()
+            stdscr.addstr(0, 0, f"All {total_input} cases are already processed. Nothing to resume.")
+            stdscr.refresh()
+            time.sleep(2)
+            curses.endwin()
+            sys.exit(0)
+        else:
+            stdscr.clear()
+            stdscr.addstr(0, 0, "Previous run detected.")
+            stdscr.addstr(1, 0, f"Processed cases: {processed_count}. Total input cases: {total_input}.")
+            stdscr.addstr(2, 0, "Press 'R' to resume processing remaining cases, or 'S' to start fresh:")
+            stdscr.refresh()
+            while True:
+                key = stdscr.getch()
+                if key in (ord('r'), ord('R')):
+                    config.resume_mode = True
+                    break
+                elif key in (ord('s'), ord('S')):
+                    config.resume_mode = False
+                    break
+            stdscr.addstr(3, 0, f"User selected: {'RESUME' if config.resume_mode else 'START FRESH'}.")
+            stdscr.refresh()
+            time.sleep(2)
+            
+            # If resuming, check for persistent 401 errors.
+            if config.resume_mode and os.path.exists(config.API_401_ERROR_TRACKING_FILE):
+                with open(config.API_401_ERROR_TRACKING_FILE, 'r') as f:
+                    retry_lines = [line.strip() for line in f if line.strip()]
+                if retry_lines:
+                    stdscr.addstr(4, 0, f"There are {len(retry_lines)} cases with persistent 401 errors.")
+                    stdscr.addstr(5, 0, "Press 'R' to retry these 401 errors, or 'S' to skip them:")
+                    stdscr.refresh()
+                    while True:
+                        key = stdscr.getch()
+                        if key in (ord('r'), ord('R')):
+                            config.retry_401_flag = True
+                            break
+                        elif key in (ord('s'), ord('S')):
+                            config.retry_401_flag = False
+                            break
+                    stdscr.addstr(6, 0, f"User selected: {'Retry 401 errors' if config.retry_401_flag else 'Skip 401 errors'}.")
+                    stdscr.refresh()
+                    time.sleep(2)
     else:
+        # No tracking file exists or it is empty; assume a fresh run.
         config.resume_mode = False
 
 # --- Logging and Progress Helpers ---
@@ -247,7 +265,6 @@ def call_experiment_api(case_number, original_data):
             for row in rows[1:]:
                 writer.writerow(row)
         append_processing_detail(f"Output written for case {case_number}.")
-        #print(f"Output written for case {case_number}.")
         update_progress()
         update_processed_cases(case_number)
     except Exception as e:
@@ -382,4 +399,3 @@ def curses_main(stdscr):
         if key in (10, 13):
             break
     processing_thread.join()
-
