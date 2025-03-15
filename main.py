@@ -8,6 +8,7 @@ import auth
 import processing
 import consolidation
 import utils
+from log_config import logger
 
 def validate_config():
     missing = []
@@ -47,6 +48,7 @@ def validate_config():
 
 def main():
     # Set up argument parsing with input file optional via -f/--file.
+    logger.info("Application started.")
     parser = argparse.ArgumentParser(description="Integrated API processing and consolidation tool")
     parser.add_argument("-f", "--file", default="",
                         help="Input JSON file with one case per line")
@@ -120,13 +122,16 @@ def main():
     api_hdr, api_dict = consolidation.load_api_responses(config.API_RESPONSE_FILE)
     if api_hdr:
         print(f"API header found: {api_hdr}")
+        logger.info("API header found.")
     else:
         print("No API header found; using default placeholder.")
+        logger.info("No API header found.")
     total_api_rows = sum(len(v) for v in api_dict.values())
     print(f"Loaded {total_api_rows} API response entries.")
     consolidation.consolidate_data(original_file, original_cases, error_log, api_hdr, api_dict, config.default_consolidated_csv)
     utils.write_csv_to_excel(config.default_consolidated_csv, config.default_consolidated_excel)
     print("Consolidation phase complete.")
+    logger.info("Data Consolidation Completed.")
 
 if __name__ == "__main__":
     validate_config()

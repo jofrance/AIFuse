@@ -10,6 +10,7 @@ import itertools
 import re
 from queue import Queue
 from threading import Semaphore
+from log_config import logger
 
 import config
 from auth import get_access_token, refresh_token
@@ -71,6 +72,7 @@ def check_resume_option(stdscr):
         else:
             stdscr.clear()
             stdscr.addstr(0, 0, "Previous run detected.")
+            logger.info("Previous run detected.")
             stdscr.addstr(1, 0, f"Processed cases: {processed_count}. Total input cases: {total_input}.")
             stdscr.addstr(2, 0, "Press 'R' to resume processing remaining cases, or 'S' to start fresh:")
             stdscr.refresh()
@@ -78,9 +80,11 @@ def check_resume_option(stdscr):
                 key = stdscr.getch()
                 if key in (ord('r'), ord('R')):
                     config.resume_mode = True
+                    logger.info("Resuming Previous Run.")
                     break
                 elif key in (ord('s'), ord('S')):
                     config.resume_mode = False
+                    logger.info("Starting Fresh Run.")
                     break
             stdscr.addstr(3, 0, f"User selected: {'RESUME' if config.resume_mode else 'START FRESH'}.")
             stdscr.refresh()
@@ -92,15 +96,18 @@ def check_resume_option(stdscr):
                     retry_lines = [line.strip() for line in f if line.strip()]
                 if retry_lines:
                     stdscr.addstr(4, 0, f"There are {len(retry_lines)} cases with persistent 401 errors.")
+                    logger.info("Cases with 401 Errors Found.")
                     stdscr.addstr(5, 0, "Press 'R' to retry these 401 errors, or 'S' to skip them:")
                     stdscr.refresh()
                     while True:
                         key = stdscr.getch()
                         if key in (ord('r'), ord('R')):
                             config.retry_401_flag = True
+                            logger.info("Retrying Cases with 401 Errors.")
                             break
                         elif key in (ord('s'), ord('S')):
                             config.retry_401_flag = False
+                            logger.info("Cases with 401 Errors Ignored.")
                             break
                     stdscr.addstr(6, 0, f"User selected: {'Retry 401 errors' if config.retry_401_flag else 'Skip 401 errors'}.")
                     stdscr.refresh()
@@ -124,6 +131,8 @@ def clear_output_files():
             file.write("")
     append_processing_detail("Output files cleared.")
     print("Output files cleared.")
+    logger.info("Output files cleared.")
+    
 
 def log_api_error(message):
     with open(config.API_ERROR_LOG_FILE, 'a') as file:
@@ -391,6 +400,7 @@ def curses_main(stdscr):
     stdscr.move(max_y - 1, 0)
     stdscr.clrtoeol()
     stdscr.addstr(max_y - 1, 0, "Processing complete! Press Enter to exit.")
+    logger.info("Processing completed.")
     stdscr.refresh()
     while True:
         key = stdscr.getch()
