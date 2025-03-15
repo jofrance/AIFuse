@@ -51,17 +51,15 @@ def clear_401_tracking_file():
 # --- Curses Prompt for Resume/Start Fresh ---
 def check_resume_option(stdscr):
     """
-    Uses the shared check_resume_status() function (from utils.py) to determine if there is resume data.
-    If the tracking file exists and has processed cases:
-       - If all cases are processed, displays a message and exits.
-       - Otherwise, prompts the user to resume or start fresh.
-    If the tracking file is missing or empty, sets resume_mode to False.
+    Uses the shared check_resume_status() function (from utils.py) to determine if there are unprocessed cases.
+    If all cases are processed, displays a message and exits.
+    Otherwise, prompts the user to resume or start fresh, and if resuming, asks about retrying 401 errors.
     """
     status = utils.check_resume_status()
     total_input = status["total_input"]
     processed_count = status["processed_count"]
-
-    # Only consider prompting if the tracking file exists and contains some data.
+    
+    # Only prompt if the tracking file exists and contains processed cases.
     if os.path.exists(config.PROCESSED_TRACKING_FILE) and processed_count > 0:
         if processed_count >= total_input:
             stdscr.clear()
@@ -88,7 +86,7 @@ def check_resume_option(stdscr):
             stdscr.refresh()
             time.sleep(2)
             
-            # If resuming, check for persistent 401 errors.
+            # If resuming, check if there are persistent 401 errors.
             if config.resume_mode and os.path.exists(config.API_401_ERROR_TRACKING_FILE):
                 with open(config.API_401_ERROR_TRACKING_FILE, 'r') as f:
                     retry_lines = [line.strip() for line in f if line.strip()]
@@ -108,7 +106,7 @@ def check_resume_option(stdscr):
                     stdscr.refresh()
                     time.sleep(2)
     else:
-        # No tracking file exists or it is empty; assume a fresh run.
+        # No tracking file exists or it's empty; no resume data.
         config.resume_mode = False
 
 # --- Logging and Progress Helpers ---
@@ -285,7 +283,7 @@ def processing_main():
     else:
         append_processing_detail("Resuming processing using previous outputs.")
 
-    file_name = config.ARGS.input
+    file_name = config.ARGS.file
     use_threading = config.ARGS.threads > 0
     max_threads = config.ARGS.threads if use_threading else None
     batching = config.ARGS.batch > 0

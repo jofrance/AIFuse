@@ -2,25 +2,88 @@ import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext, messagebox, filedialog
 import config
 import processing
 import consolidation
 import utils  # This module now contains the check_resume_status() function
 
+def prompt_for_input_file(root):
+    """
+    Displays a modal dialog with a message and two buttons:
+      - 'Browse' opens a file–selection dialog.
+      - 'Cancel' closes the application.
+    Returns the selected file path (or an empty string if canceled).
+    """
+    fixed_width = 300
+    fixed_height = 150
+
+    dialog = tk.Toplevel(root)
+    dialog.title("Select Input File")
+    dialog.geometry(f"{fixed_width}x{fixed_height}")
+    dialog.transient(root)   # Make dialog a child of root.
+    dialog.lift()            # Bring dialog to the front.
+    dialog.focus_force()     # Force focus on the dialog.
+    dialog.grab_set()        # Make it modal.
+
+    # Create dialog content.
+    content_frame = tk.Frame(dialog)
+    content_frame.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
+
+    label = tk.Label(content_frame, text="Please choose an input JSON file:")
+    label.pack(pady=10)
+
+    selected_file = {"file": ""}
+
+    def browse():
+        file_path = filedialog.askopenfilename(
+            title="Select Input JSON File",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if file_path:
+            selected_file["file"] = file_path
+            dialog.destroy()
+
+    def cancel():
+        dialog.destroy()
+        root.destroy()
+        sys.exit(0)
+
+    button_frame = tk.Frame(content_frame)
+    button_frame.pack(pady=10)
+
+    browse_button = ttk.Button(button_frame, text="Browse", command=browse)
+    browse_button.pack(side=tk.LEFT, padx=10)
+
+    cancel_button = ttk.Button(button_frame, text="Cancel", command=cancel)
+    cancel_button.pack(side=tk.LEFT, padx=10)
+
+    # Center the dialog on the screen.
+    dialog.update_idletasks()
+    width = fixed_width
+    height = fixed_height
+    screen_width = dialog.winfo_screenwidth()
+    screen_height = dialog.winfo_screenheight()
+    x = (screen_width // 2) - (width // 2)
+    y = (screen_height // 2) - (height // 2)
+    dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+    dialog.wait_window()  # Wait until dialog is closed.
+    return selected_file["file"]
+
 def tk_check_resume_option(root):
     """
-    Uses the shared check_resume_status() function from utils.py to determine if there is resume data.
+    Uses the shared check_resume_status() function from utils.py to determine if there are unprocessed cases.
     If the tracking file exists and contains processed cases:
        - If all cases are processed, informs the user and exits.
-       - Otherwise, prompts the user to resume or start fresh.
+       - Otherwise, prompts the user to resume or start fresh, and if resuming, asks about retrying 401 errors.
     If the tracking file is missing or empty, sets resume_mode to False.
     """
     status = utils.check_resume_status()
     total_input = status["total_input"]
     processed_count = status["processed_count"]
 
-    # Only consider prompting if the tracking file exists and has some processed cases.
+    # Only prompt if the tracking file exists and contains processed cases.
     if os.path.exists(config.PROCESSED_TRACKING_FILE) and processed_count > 0:
         if processed_count >= total_input:
             messagebox.showinfo("All Cases Processed",
@@ -46,13 +109,12 @@ def tk_check_resume_option(root):
                     result2 = messagebox.askyesno("Retry 401 Errors", msg2, parent=root)
                     config.retry_401_flag = True if result2 else False
     else:
-        # No tracking file or it's empty; no resume data.
+        # No tracking file exists or it's empty; no resume data.
         config.resume_mode = False
-
 
 def run_consolidation_phase():
     config.processing_details.append("Starting consolidation phase...")
-    original_file = config.ARGS.input
+    original_file = config.ARGS.file
     original_cases = consolidation.load_original_cases(original_file)
     config.processing_details.append(f"Loaded {len(original_cases)} original cases.")
     error_log = consolidation.load_error_log(config.API_ERROR_LOG_FILE)
@@ -77,6 +139,18 @@ def tk_ui_main():
     root = tk.Tk()
     root.title("AIFuse - Processing & Consolidation Progress")
     root.geometry("600x400")
+    
+    # Center the main window.
+    root.eval('tk::PlaceWindow . center')
+
+    # If no input file was provided, prompt the user with a custom dialog.
+    if not config.ARGS.file.strip():
+        selected_file = prompt_for_input_file(root)
+        if selected_file:
+            config.ARGS.file = selected_file
+        else:
+            messagebox.showerror("Error", "No input file selected. Exiting.", parent=root)
+            sys.exit(1)
 
     # Create UI elements.
     progress_label = tk.Label(root, text="Processing Progress:")

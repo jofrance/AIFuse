@@ -57,7 +57,7 @@ def check_resume_status():
 
     # Count total input cases from the input file.
     try:
-        with open(config.ARGS.input, 'r') as f:
+        with open(config.ARGS.file, 'r') as f:
             total_input = sum(1 for line in f if line.strip())
     except Exception:
         total_input = 0

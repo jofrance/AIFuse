@@ -46,9 +46,10 @@ def validate_config():
         sys.exit(1)
 
 def main():
-    # Set up argument parsing.
+    # Set up argument parsing with input file optional via -f/--file.
     parser = argparse.ArgumentParser(description="Integrated API processing and consolidation tool")
-    parser.add_argument("input", help="Input JSON file with one case per line")
+    parser.add_argument("-f", "--file", default="",
+                        help="Input JSON file with one case per line")
     parser.add_argument("-t", "--threads", type=int, default=0,
                         help="Maximum number of threads for API processing (0 for sequential)")
     parser.add_argument("-b", "--batch", type=int, default=0,
@@ -63,7 +64,17 @@ def main():
                         help="Force using curses UI even on Windows")
     config.ARGS = parser.parse_args()
 
-    # Decide which UI to launch based on arguments and OS.
+    # If no input file is provided...
+    if not config.ARGS.file.strip():
+        # For console/no-ui or curses mode (or non-Windows), prompt via console.
+        if config.ARGS.no_ui or config.ARGS.with_curses or platform.system() != "Windows":
+            config.ARGS.file = input("Please enter the path to the input JSON file: ").strip()
+            if not config.ARGS.file:
+                print("No input file provided. Exiting.")
+                sys.exit(1)
+        # For Windows UI mode, win_ui.py will handle file selection.
+
+    # Now choose which UI to launch.
     if config.ARGS.no_ui:
         processing.processing_main()
     elif config.ARGS.with_curses:
@@ -101,7 +112,7 @@ def main():
 
     # Consolidation Phase (runs after UI completes).
     print("\nStarting consolidation phase...")
-    original_file = config.ARGS.input
+    original_file = config.ARGS.file
     original_cases = consolidation.load_original_cases(original_file)
     print(f"Loaded {len(original_cases)} original cases.")
     error_log = consolidation.load_error_log(config.API_ERROR_LOG_FILE)
