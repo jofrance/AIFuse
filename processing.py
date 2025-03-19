@@ -133,7 +133,6 @@ def clear_output_files():
     print("Output files cleared.")
     logger.info("Output files cleared.")
     
-
 def log_api_error(message):
     with open(config.API_ERROR_LOG_FILE, 'a') as file:
         file.write(message + "\n")
@@ -284,6 +283,11 @@ def process_batch(batch):
 
 # --- Curses UI and Main Processing Loop ---
 def processing_main():
+    # Update tracking filenames using MD5 + experiment ID naming
+    from config import generate_filename
+    config.PROCESSED_TRACKING_FILE = generate_filename(config.ARGS.file, config.experimentId, "processed", "txt")
+    config.API_401_ERROR_TRACKING_FILE = generate_filename(config.ARGS.file, config.experimentId, "401", "txt")
+
     if not config.resume_mode:
         if os.path.exists(config.PROCESSED_TRACKING_FILE):
             os.remove(config.PROCESSED_TRACKING_FILE)
