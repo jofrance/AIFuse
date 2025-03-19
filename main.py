@@ -102,7 +102,8 @@ def main():
     elif config.ARGS.with_curses:
         try:
             import curses
-            curses.wrapper(processing.curses_main)
+            from curses_ui import curses_main
+            curses.wrapper(curses_main)
         except Exception as e:
             print(f"Curses UI error: {e}")
             print("Falling back to plain console mode.")

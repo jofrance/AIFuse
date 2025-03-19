@@ -14,7 +14,7 @@ from log_config import logger
 
 import config
 from auth import get_access_token, refresh_token
-import utils  # Import the shared utilities (which now contains check_resume_status)
+import utils  # Contains the shared utilities (e.g., check_resume_status)
 
 # --- Tracking File Functions ---
 def load_processed_cases():
@@ -50,17 +50,12 @@ def clear_401_tracking_file():
             f.write("")
 
 # --- Curses Prompt for Resume/Start Fresh ---
+# (Retained here for reuse by curses_ui.py)
 def check_resume_option(stdscr):
-    """
-    Uses the shared check_resume_status() function (from utils.py) to determine if there are unprocessed cases.
-    If all cases are processed, displays a message and exits.
-    Otherwise, prompts the user to resume or start fresh, and if resuming, asks about retrying 401 errors.
-    """
     status = utils.check_resume_status()
     total_input = status["total_input"]
     processed_count = status["processed_count"]
     
-    # Only prompt if the tracking file exists and contains processed cases.
     if os.path.exists(config.PROCESSED_TRACKING_FILE) and processed_count > 0:
         if processed_count >= total_input:
             stdscr.clear()
@@ -89,8 +84,6 @@ def check_resume_option(stdscr):
             stdscr.addstr(3, 0, f"User selected: {'RESUME' if config.resume_mode else 'START FRESH'}.")
             stdscr.refresh()
             time.sleep(2)
-            
-            # If resuming, check if there are persistent 401 errors.
             if config.resume_mode and os.path.exists(config.API_401_ERROR_TRACKING_FILE):
                 with open(config.API_401_ERROR_TRACKING_FILE, 'r') as f:
                     retry_lines = [line.strip() for line in f if line.strip()]
@@ -113,7 +106,6 @@ def check_resume_option(stdscr):
                     stdscr.refresh()
                     time.sleep(2)
     else:
-        # No tracking file exists or it's empty; no resume data.
         config.resume_mode = False
 
 # --- Logging and Progress Helpers ---
@@ -122,7 +114,6 @@ def append_processing_detail(message):
         config.processing_details.append(message)
         if len(config.processing_details) > 20:
             config.processing_details.pop(0)
-    #print(message)
 
 def clear_output_files():
     output_files = [config.RAW_OUTPUT_FILE, config.API_RESPONSE_FILE, config.API_ERROR_LOG_FILE, config.SCRIPT_ERROR_LOG_FILE, config.API_401_ERROR_TRACKING_FILE]
@@ -281,9 +272,8 @@ def process_batch(batch):
     for case_number, original_data in batch:
         call_experiment_api(case_number, original_data)
 
-# --- Curses UI and Main Processing Loop ---
+# --- Main Processing Loop ---
 def processing_main():
-    # Update tracking filenames using MD5 + experiment ID naming
     from config import generate_filename
     config.PROCESSED_TRACKING_FILE = generate_filename(config.ARGS.file, config.experimentId, "processed", "txt")
     config.API_401_ERROR_TRACKING_FILE = generate_filename(config.ARGS.file, config.experimentId, "401", "txt")
@@ -368,46 +358,3 @@ def processing_main():
     print("Processing complete.")
     stop_event.set()
     token_thread.join()
-
-def curses_main(stdscr):
-    curses.curs_set(0)
-    stdscr.nodelay(True)
-    spinner_cycle = itertools.cycle(["|", "/", "-", "\\"])
-    start_time = time.time()
-
-    check_resume_option(stdscr)
-    processing_thread = threading.Thread(target=processing_main)
-    processing_thread.start()
-
-    while processing_thread.is_alive() or config.cases_processed < config.total_cases:
-        elapsed_time = time.time() - start_time
-        minutes, seconds = divmod(int(elapsed_time), 60)
-        stdscr.move(0, 0)
-        stdscr.clrtoeol()
-        stdscr.addstr(0, 0, f"Processing cases: {config.cases_processed}/{config.total_cases}")
-        stdscr.move(1, 0)
-        stdscr.clrtoeol()
-        stdscr.addstr(1, 0, f"{next(spinner_cycle)}")
-        stdscr.move(2, 0)
-        stdscr.clrtoeol()
-        stdscr.addstr(2, 0, f"Elapsed time: {minutes:02}:{seconds:02}")
-        with config.details_lock:
-            details_to_show = config.processing_details[-20:]
-        for i, msg in enumerate(details_to_show):
-            stdscr.move(4 + i, 0)
-            stdscr.clrtoeol()
-            stdscr.addstr(4 + i, 0, msg[:curses.COLS - 1])
-        stdscr.refresh()
-        time.sleep(0.1)
-    stdscr.nodelay(False)
-    max_y, max_x = stdscr.getmaxyx()
-    stdscr.move(max_y - 1, 0)
-    stdscr.clrtoeol()
-    stdscr.addstr(max_y - 1, 0, "Processing complete! Press Enter to exit.")
-    logger.info("Processing completed.")
-    stdscr.refresh()
-    while True:
-        key = stdscr.getch()
-        if key in (10, 13):
-            break
-    processing_thread.join()
