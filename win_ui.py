@@ -7,54 +7,233 @@ import shutil
 import config
 import processing
 import consolidation
-import utils  # Contains check_resume_status()
+import utils
+from config import generate_filename
+from job_manager import Job, get_input_file_md5, save_job_state, load_all_jobs, clear_job_state
 
-###########################################
-# Configuration validation function.
-###########################################
-def validate_config():
-    missing = []
-    if not config.OUTPUT_DIR:
-        missing.append("OUTPUT_DIR")
-    if not os.path.basename(config.default_consolidated_csv):
-        missing.append("default_consolidated_csv")
-    if not os.path.basename(config.default_consolidated_excel):
-        missing.append("default_consolidated_excel")
-    if not os.path.basename(config.RAW_OUTPUT_FILE):
-        missing.append("RAW_OUTPUT_FILE")
-    if not os.path.basename(config.API_RESPONSE_FILE):
-        missing.append("API_RESPONSE_FILE")
-    if not os.path.basename(config.API_ERROR_LOG_FILE):
-        missing.append("API_ERROR_LOG_FILE")
-    if not os.path.basename(config.SCRIPT_ERROR_LOG_FILE):
-        missing.append("SCRIPT_ERROR_LOG_FILE")
-    if not os.path.basename(config.PROCESSED_TRACKING_FILE):
-        missing.append("PROCESSED_TRACKING_FILE")
-    if not os.path.basename(config.API_401_ERROR_TRACKING_FILE):
-        missing.append("API_401_ERROR_TRACKING_FILE")
-    if not config.apiUrl:
-        missing.append("apiUrl")
-    if not config.experimentId:
-        missing.append("experimentId")
-    if not config.API_TIMEOUT:
-        missing.append("API_TIMEOUT")
-    if not config.client_id:
-        missing.append("client_id")
-    if not config.authority:
-        missing.append("authority")
-    if not config.scopes:
-        missing.append("scopes")
-    if missing:
-        messagebox.showerror("Configuration Error", "Missing configuration: " + ", ".join(missing))
-        sys.exit(1)
+# Global dictionary to manage jobs: job_id -> Job object
+jobs_dict = {}
 
-###########################################
-# Popup to prompt for the input file.
-###########################################
+# Global UI components
+job_list_tree = None
+notebook = None
+
+# Helper: Append part of the job_id to a generated filename to ensure uniqueness
+def unique_job_filename(input_file, experiment_id, basename, extension, job_id):
+    base = generate_filename(input_file, experiment_id, basename, extension)
+    root_part, ext_part = os.path.splitext(base)
+    return f"{root_part}_{job_id[:8]}{ext_part}"
+
+# Ensure experiments keep their original casing
+if hasattr(config, "CONFIG"):
+    config.CONFIG.optionxform = str
+
+def update_jobs_list():
+    global job_list_tree
+    # Clear the treeview
+    for row in job_list_tree.get_children():
+        job_list_tree.delete(row)
+    # Retrieve experiments mapping from config preserving original casing
+    experiments = {}
+    if hasattr(config, "CONFIG") and config.CONFIG.has_section("Experiments"):
+        for key in config.CONFIG.options("Experiments"):
+            experiments[key] = config.CONFIG.get("Experiments", key)
+    # Reverse mapping: experiment ID -> experiment friendly name
+    exp_name_map = {v: k for k, v in experiments.items()}
+    for job in jobs_dict.values():
+        exp_name = exp_name_map.get(job.experiment_id, job.experiment_id)
+        job_list_tree.insert("", "end", iid=job.job_id,
+                             values=(job.job_id, os.path.basename(job.input_file), exp_name, job.status))
+
+def create_job_tab(job):
+    global notebook
+    tab = ttk.Frame(notebook)
+    notebook.add(tab, text=f"Job {job.job_id[:8]}")
+    # Progress bar
+    progress_var = tk.DoubleVar(value=job.progress_done)
+    progress_bar = ttk.Progressbar(tab, variable=progress_var, maximum=job.progress_total or 1)
+    progress_bar.pack(fill=tk.X, padx=5, pady=5)
+    # Log text area (manual scrolling)
+    log_text = scrolledtext.ScrolledText(tab, wrap=tk.WORD, height=10)
+    log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    # Stop Job button
+    stop_button = ttk.Button(tab, text="Stop Job",
+                             command=lambda job_id=job.job_id: cancel_job(job_id))
+    stop_button.pack(side=tk.LEFT, padx=5, pady=5)
+    # Resume Job button
+    resume_button = ttk.Button(tab, text="Resume Job",
+                               command=lambda job_id=job.job_id: resume_job(job_id))
+    resume_button.pack(side=tk.LEFT, padx=5, pady=5)
+    # Save Results button (disabled initially)
+    save_button = ttk.Button(tab, text="Save Results",
+                             command=lambda job=job: save_job_results(job), state=tk.DISABLED)
+    save_button.pack(side=tk.RIGHT, padx=5, pady=5)
+    
+    # Store UI components in the job object for later updates
+    job.ui = {
+        "progress_var": progress_var,
+        "progress_bar": progress_bar,
+        "log_text": log_text,
+        "cancel_button": stop_button,
+        "resume_button": resume_button,
+        "save_button": save_button,
+        "tab": tab
+    }
+    # If job is running, disable resume button; otherwise enable it.
+    if job.status == "running":
+        resume_button.config(state=tk.DISABLED)
+    else:
+        resume_button.config(state=tk.NORMAL)
+
+def cancel_job(job_id):
+    if job_id in jobs_dict:
+        job = jobs_dict[job_id]
+        job.cancel_event.set()
+        # Set status to "stopped" (not "cancelled")
+        job.status = "stopped"
+        job.log("Job stopped by user.")
+        update_jobs_list()
+        job.ui["cancel_button"].config(state=tk.DISABLED)
+        job.ui["resume_button"].config(state=tk.NORMAL)
+        save_job_state(job)
+
+def resume_job(job_id):
+    job = jobs_dict.get(job_id)
+    if not job:
+        return
+    job.cancel_event.clear()
+    job.status = "running"
+    job.log("Job resumed by user.")
+    job.ui["cancel_button"].config(state=tk.NORMAL)
+    job.ui["resume_button"].config(state=tk.DISABLED)
+    update_jobs_list()
+    
+    def run_resumed_job():
+        processing.processing_main_job(job)
+        if not job.cancel_event.is_set():
+            job.status = "finished"
+            job.log("Job finished processing after resume.")
+            original_cases = consolidation.load_original_cases(job.input_file)
+            job.log(f"Loaded {len(original_cases)} original cases.")
+            error_log = consolidation.load_error_log(job.api_error_log_file)
+            job.log(f"Loaded {len(error_log)} error entries.")
+            api_hdr, api_dict = consolidation.load_api_responses(job.api_response_file)
+            if api_hdr:
+                job.log(f"API header found: {api_hdr}")
+            else:
+                job.log("No API header found; using default placeholder.")
+            total_api_rows = sum(len(v) for v in api_dict.values())
+            job.log(f"Loaded {total_api_rows} API response entries.")
+            consolidation.consolidate_data(job.input_file, original_cases, error_log,
+                                           api_hdr, api_dict, job.consolidated_csv)
+            utils.write_csv_to_excel(job.consolidated_csv, job.consolidated_excel)
+            job.log("Consolidation phase complete.")
+            job.ui["save_button"].config(state=tk.NORMAL)
+        save_job_state(job)
+        update_jobs_list()
+    threading.Thread(target=run_resumed_job, daemon=True).start()
+
+def save_job_results(job):
+    dest_file = filedialog.asksaveasfilename(
+        title="Save Consolidated Excel File As",
+        defaultextension=".xlsx",
+        filetypes=[("Excel Files", "*.xlsx")],
+        initialfile=os.path.basename(job.consolidated_excel)
+    )
+    if dest_file:
+        try:
+            shutil.copy(job.consolidated_excel, dest_file)
+            messagebox.showinfo("Success", f"Excel file saved successfully for Job {job.job_id[:8]}.")
+            job.status = "finished"
+            job.log("Job output saved. Clearing job from UI.")
+            update_jobs_list()
+            notebook.forget(job.ui["tab"])
+            clear_job_state(job.job_id)
+            del jobs_dict[job.job_id]
+            update_jobs_list()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save file for Job {job.job_id[:8]}: {e}")
+
+def start_new_job(main_window):
+    print("JOBS_DICT KEYS:", list(jobs_dict.keys()))
+    for job in jobs_dict.values():
+        print(f"→ Job {job.job_id[:8]} | logs length={len(job.logs)} | progress={job.progress_done}/{job.progress_total}")
+
+    file_selected = prompt_for_input_file(main_window)
+    if not file_selected:
+        messagebox.showerror("Error", "No input file selected. Job cancelled.", parent=main_window)
+        return
+    prompt_for_experiment_selection(main_window)
+    experiment_id = config.experimentId
+    file_md5 = get_input_file_md5(file_selected)
+    duplicate = None
+
+    job = Job(file_selected, experiment_id)
+    job.processed_tracking_file = unique_job_filename(job.input_file, job.experiment_id, "processed", "txt", job.job_id)
+    job.api_401_tracking_file = unique_job_filename(job.input_file, job.experiment_id, "401", "txt", job.job_id)
+    job.raw_output_file = unique_job_filename(job.input_file, job.experiment_id, "APIResponseRaw", "csv", job.job_id)
+    job.api_response_file = unique_job_filename(job.input_file, job.experiment_id, "APIResponse", "csv", job.job_id)
+    job.api_error_log_file = unique_job_filename(job.input_file, job.experiment_id, "APIError", "log", job.job_id)
+    job.script_error_log_file = unique_job_filename(job.input_file, job.experiment_id, "ScriptError", "log", job.job_id)
+    job.consolidated_csv = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "csv", job.job_id)
+    job.consolidated_excel = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "xlsx", job.job_id)
+    jobs_dict[job.job_id] = job
+    update_jobs_list()
+    create_job_tab(job)
+    print("🔸 After start_new_job(), jobs_dict keys:", list(jobs_dict.keys()))
+
+    
+    def run_job():
+        processing.processing_main_job(job)
+        if not job.cancel_event.is_set():
+            job.status = "finished"
+            job.log("Job finished processing.")
+            original_cases = consolidation.load_original_cases(job.input_file)
+            job.log(f"Loaded {len(original_cases)} original cases.")
+            error_log = consolidation.load_error_log(job.api_error_log_file)
+            job.log(f"Loaded {len(error_log)} error entries.")
+            api_hdr, api_dict = consolidation.load_api_responses(job.api_response_file)
+            if api_hdr:
+                job.log(f"API header found: {api_hdr}")
+            else:
+                job.log("No API header found; using default placeholder.")
+            total_api_rows = sum(len(v) for v in api_dict.values())
+            job.log(f"Loaded {total_api_rows} API response entries.")
+            consolidation.consolidate_data(job.input_file, original_cases, error_log,
+                                           api_hdr, api_dict, job.consolidated_csv)
+            utils.write_csv_to_excel(job.consolidated_csv, job.consolidated_excel)
+            job.log("Consolidation phase complete.")
+            job.ui["save_button"].config(state=tk.NORMAL)
+        save_job_state(job)
+        update_jobs_list()
+    threading.Thread(target=run_job, daemon=True).start()
+
+def stop_all_jobs():
+    for job in list(jobs_dict.values()):
+        if job.status not in ["finished", "stopped"]:
+            job.cancel_event.set()
+            job.status = "stopped"
+            job.log("Job stopped by Stop All.")
+            job.ui["cancel_button"].config(state=tk.DISABLED)
+            job.ui["resume_button"].config(state=tk.NORMAL)
+            save_job_state(job)
+    update_jobs_list()
+
+def clear_all_jobs():
+    stop_all_jobs()
+    global jobs_dict
+    jobs_dict.clear()
+    jobs_state_dir = os.path.join(config.OUTPUT_DIR, "jobs_state")
+    for filename in os.listdir(jobs_state_dir):
+        if filename.endswith(".json"):
+            os.remove(os.path.join(jobs_state_dir, filename))
+    update_jobs_list()
+    for tab in notebook.tabs():
+        notebook.forget(tab)
+
 def prompt_for_input_file(root):
     fixed_width = 300
     fixed_height = 150
-
     dialog = tk.Toplevel(root)
     dialog.title("Select Input File")
     dialog.geometry(f"{fixed_width}x{fixed_height}")
@@ -62,15 +241,11 @@ def prompt_for_input_file(root):
     dialog.lift()
     dialog.focus_force()
     dialog.grab_set()
-
     content_frame = tk.Frame(dialog)
     content_frame.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
-
     label = tk.Label(content_frame, text="Please choose an input JSON file:")
     label.pack(pady=10)
-
     selected_file = {"file": ""}
-
     def browse():
         file_path = filedialog.askopenfilename(
             title="Select Input JSON File",
@@ -79,35 +254,26 @@ def prompt_for_input_file(root):
         if file_path:
             selected_file["file"] = file_path
             dialog.destroy()
-
     def cancel():
         dialog.destroy()
-        # Instead of exiting, just return; caller will handle missing file.
-    
     button_frame = tk.Frame(content_frame)
     button_frame.pack(pady=10)
     browse_button = ttk.Button(button_frame, text="Browse", command=browse)
     browse_button.pack(side=tk.LEFT, padx=10)
     cancel_button = ttk.Button(button_frame, text="Cancel", command=cancel)
     cancel_button.pack(side=tk.LEFT, padx=10)
-
     dialog.update_idletasks()
     screen_width = dialog.winfo_screenwidth()
     screen_height = dialog.winfo_screenheight()
     x = (screen_width // 2) - (fixed_width // 2)
     y = (screen_height // 2) - (fixed_height // 2)
     dialog.geometry(f"{fixed_width}x{fixed_height}+{x}+{y}")
-
     dialog.wait_window()
     return selected_file["file"]
 
-###########################################
-# Popup to prompt for experiment selection.
-###########################################
 def prompt_for_experiment_selection(root):
     fixed_width = 400
     fixed_height = 200
-
     dialog = tk.Toplevel(root)
     dialog.title("Select Experiment")
     dialog.geometry(f"{fixed_width}x{fixed_height}")
@@ -115,27 +281,21 @@ def prompt_for_experiment_selection(root):
     dialog.lift()
     dialog.focus_force()
     dialog.grab_set()
-
     content_frame = tk.Frame(dialog)
     content_frame.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
-
     label = tk.Label(content_frame, text="Please select an experiment:")
     label.pack(pady=10)
-
+    experiments = {}
     if hasattr(config, "CONFIG") and config.CONFIG.has_section("Experiments"):
-        experiments = dict(config.CONFIG.items("Experiments"))
-    else:
-        experiments = {}
-
+        for key in config.CONFIG.options("Experiments"):
+            experiments[key] = config.CONFIG.get("Experiments", key)
     if not experiments:
         dialog.destroy()
         return
-
     experiment_var = tk.StringVar()
     combobox = ttk.Combobox(content_frame, textvariable=experiment_var,
-                            values=list(experiments.keys()), state="readonly")
+                              values=list(experiments.keys()), state="readonly")
     combobox.pack(pady=10)
-
     default_name = None
     for name, exp_id in experiments.items():
         if exp_id == config.experimentId:
@@ -146,249 +306,72 @@ def prompt_for_experiment_selection(root):
     else:
         combobox.current(0)
         config.experimentId = experiments[combobox.get()]
-
     def on_ok():
         selected = experiment_var.get()
         if selected in experiments:
             config.experimentId = experiments[selected]
         dialog.destroy()
-
     ok_button = ttk.Button(content_frame, text="OK", command=on_ok)
     ok_button.pack(pady=10)
-
     dialog.update_idletasks()
     screen_width = dialog.winfo_screenwidth()
     screen_height = dialog.winfo_screenheight()
     x = (screen_width // 2) - (fixed_width // 2)
     y = (screen_height // 2) - (fixed_height // 2)
     dialog.geometry(f"{fixed_width}x{fixed_height}+{x}+{y}")
-
     dialog.wait_window()
     return
 
-###########################################
-# Popup to save the consolidated Excel file.
-# After saving (or not), control returns to the main window.
-###########################################
-def show_save_copy_prompt(root):
-    save_copy = messagebox.askyesno("Save Copy", 
-        "All phases complete.\nWould you like to save a copy of the consolidated Excel output to another location?", 
-        parent=root)
-    if save_copy:
-        dest_file = filedialog.asksaveasfilename(
-            title="Save Consolidated Excel File As",
-            defaultextension=".xlsx",
-            filetypes=[("Excel Files", "*.xlsx")],
-            initialfile=os.path.basename(config.default_consolidated_excel),
-            parent=root
-        )
-        if dest_file:
-            try:
-                shutil.copy(config.default_consolidated_excel, dest_file)
-                messagebox.showinfo("Success", "Excel file saved successfully.", parent=root)
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to save file: {e}", parent=root)
-    # Do not close the application; simply return control.
-
-###########################################
-# Consolidation phase function.
-###########################################
-def run_consolidation_phase():
-    config.processing_details.append("Starting consolidation phase...")
-    original_file = config.ARGS.file
-    original_cases = consolidation.load_original_cases(original_file)
-    config.processing_details.append(f"Loaded {len(original_cases)} original cases.")
-    error_log = consolidation.load_error_log(config.API_ERROR_LOG_FILE)
-    config.processing_details.append(f"Loaded {len(error_log)} error entries.")
-    api_hdr, api_dict = consolidation.load_api_responses(config.API_RESPONSE_FILE)
-    if api_hdr:
-        config.processing_details.append(f"API header found: {api_hdr}")
-    else:
-        config.processing_details.append("No API header found; using default placeholder.")
-    total_api_rows = sum(len(v) for v in api_dict.values())
-    config.processing_details.append(f"Loaded {total_api_rows} API response entries.")
-    consolidation.consolidate_data(
-        original_file, original_cases, error_log, api_hdr, api_dict, config.default_consolidated_csv
-    )
-    config.processing_details.append(f"Consolidated CSV written to {config.default_consolidated_csv}")
-    utils.write_csv_to_excel(config.default_consolidated_csv, config.default_consolidated_excel)
-    config.processing_details.append(f"Excel file written to {config.default_consolidated_excel}")
-    config.processing_details.append("Consolidation phase complete.")
-
-###########################################
-# Option to check resume status (if needed).
-###########################################
-def tk_check_resume_option(root):
-    status = utils.check_resume_status()
-    total_input = status["total_input"]
-    processed_count = status["processed_count"]
-
-    if os.path.exists(config.PROCESSED_TRACKING_FILE):
-        if processed_count == 0:
-            config.resume_mode = False
-            return
-        if processed_count >= total_input:
-            messagebox.showinfo("All Cases Processed",
-                                f"All {total_input} cases are already processed. Nothing to resume.",
-                                parent=root)
-            return
-        else:
-            msg = (f"Previous run detected.\nProcessed cases: {processed_count}\n"
-                   f"Total input cases: {total_input}\n\n"
-                   "Do you want to resume processing (Yes) or start fresh (No)?")
-            result = messagebox.askyesno("Resume or Start Fresh", msg, parent=root)
-            config.resume_mode = True if result else False
-
-            api401_file = os.path.abspath(config.API_401_ERROR_TRACKING_FILE)
-            if config.resume_mode and os.path.exists(api401_file):
-                with open(config.API_401_ERROR_TRACKING_FILE, 'r') as f:
-                    retry_lines = [line.strip() for line in f if line.strip()]
-                if retry_lines:
-                    msg2 = (f"There are {len(retry_lines)} cases with persistent 401 errors.\n"
-                            "Do you want to retry these errors (Yes) or skip them (No)?")
-                    result2 = messagebox.askyesno("Retry 401 Errors", msg2, parent=root)
-                    config.retry_401_flag = True if result2 else False
-    else:
-        config.resume_mode = False
-
-###########################################
-# Function to start a new job.
-# Triggered when the "New Job" button is pressed.
-###########################################
-def start_new_job(root, progress_bar, progress_var, log_text, new_job_button):
-    # Disable the New Job button during processing.
-    new_job_button.config(state=tk.DISABLED)
-    
-    # Clear previous job details.
-    config.processing_details.clear()
-    config.cases_processed = 0
-    config.total_cases = 0
-
-    # Prompt for file selection.
-    file_selected = prompt_for_input_file(root)
-    if not file_selected:
-        messagebox.showerror("Error", "No input file selected. Job cancelled.", parent=root)
-        new_job_button.config(state=tk.NORMAL)
-        return
-    config.ARGS.file = file_selected
-
-    # Prompt for experiment selection.
-    prompt_for_experiment_selection(root)
-
-    # Build per-run tracking and output filenames using the MD5 + experiment ID convention.
-    from config import generate_filename
-    config.PROCESSED_TRACKING_FILE = generate_filename(config.ARGS.file, config.experimentId, "processed", "txt")
-    config.API_401_ERROR_TRACKING_FILE = generate_filename(config.ARGS.file, config.experimentId, "401", "txt")
-    config.RAW_OUTPUT_FILE = generate_filename(config.ARGS.file, config.experimentId, "APIResponseRaw", "csv")
-    config.API_RESPONSE_FILE = generate_filename(config.ARGS.file, config.experimentId, "APIResponse", "csv")
-    config.API_ERROR_LOG_FILE = generate_filename(config.ARGS.file, config.experimentId, "APIError", "log")
-    config.SCRIPT_ERROR_LOG_FILE = generate_filename(config.ARGS.file, config.experimentId, "ScriptError", "log")
-    config.default_consolidated_csv = generate_filename(config.ARGS.file, config.experimentId, "Consolidated_Output", "csv")
-    config.default_consolidated_excel = generate_filename(config.ARGS.file, config.experimentId, "Consolidated_Output", "xlsx")
-
-    # Duplicate detection: check if any output/tracking files already exist.
-    duplicate_files = []
-    for file in [config.PROCESSED_TRACKING_FILE, config.API_401_ERROR_TRACKING_FILE,
-                 config.RAW_OUTPUT_FILE, config.API_RESPONSE_FILE,
-                 config.API_ERROR_LOG_FILE, config.SCRIPT_ERROR_LOG_FILE,
-                 config.default_consolidated_csv, config.default_consolidated_excel]:
-        if os.path.exists(file):
-            duplicate_files.append(file)
-    if duplicate_files:
-        answer = messagebox.askyesno("Duplicate Execution Detected",
-            "A result file already exists for this set of cases and experiment.\nDo you want to re-run and overwrite these files?",
-            parent=root)
-        if answer:
-            for file in duplicate_files:
-                try:
-                    os.remove(file)
-                except Exception as e:
-                    messagebox.showerror("Error", f"Could not remove file {file}: {e}", parent=root)
-        else:
-            new_job_button.config(state=tk.NORMAL)
-            return
-
-    # For a new job, always start fresh.
-    config.resume_mode = False
-    if os.path.exists(config.PROCESSED_TRACKING_FILE):
-        os.remove(config.PROCESSED_TRACKING_FILE)
-    processing.clear_output_files()
-    processing.clear_401_tracking_file()
-
-    # Check resume option (if applicable).
-    tk_check_resume_option(root)
-
-    # Start processing in a separate thread.
-    processing_done = threading.Event()
-    def run_processing():
-        processing.processing_main()
-        processing_done.set()
-    processing_thread = threading.Thread(target=run_processing)
-    processing_thread.start()
-
-    # Update UI periodically during processing.
-    def update_ui():
-        total = config.total_cases if config.total_cases else 1
-        progress_bar.config(maximum=total)
-        progress_var.set(config.cases_processed)
-        log_text.delete(1.0, tk.END)
-        with config.details_lock:
-            for msg in config.processing_details:
-                log_text.insert(tk.END, msg + "\n")
-        if not processing_done.is_set():
-            root.after(500, update_ui)
-        else:
-            # After processing, run consolidation.
-            config.processing_details.append("Processing phase complete. Starting consolidation...")
-            consolidation_thread = threading.Thread(target=run_consolidation_phase)
-            consolidation_thread.start()
-            consolidation_thread.join()
-            # After consolidation, prompt for saving a copy.
-            show_save_copy_prompt(root)
-            # Re-enable the New Job button.
-            new_job_button.config(state=tk.NORMAL)
-    update_ui()
-
-###########################################
-# Main Windows UI Function.
-# This creates the persistent main window with a "New Job" button.
-###########################################
 def tk_ui_main():
-    # Validate configuration before starting.
-    validate_config()
-    
+    global job_list_tree, notebook
     if config.ARGS is None:
         import argparse
         config.ARGS = argparse.Namespace(file="", threads=0, batch=0,
                                            consolidated_csv=config.default_consolidated_csv,
                                            consolidated_excel=config.default_consolidated_excel,
                                            no_ui=False, with_curses=False)
-
     root = tk.Tk()
-    root.title("AIFuse - Processing & Consolidation")
-    root.geometry("600x400")
-    root.eval('tk::PlaceWindow . center')
-
-    # Main UI frame.
+    root.title("AIFuse - Multi-Job Processing & Consolidation")
+    root.geometry("1050x600")
     main_frame = tk.Frame(root)
     main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-    # "New Job" button.
-    new_job_button = ttk.Button(main_frame, text="New Job",
-                                command=lambda: start_new_job(root, progress_bar, progress_var, log_text, new_job_button))
-    new_job_button.pack(pady=10)
-
-    # Processing progress label and progress bar.
-    progress_label = tk.Label(main_frame, text="Processing Progress:")
-    progress_label.pack(pady=5)
-    progress_var = tk.DoubleVar()
-    progress_bar = ttk.Progressbar(main_frame, variable=progress_var, maximum=1, mode='determinate')
-    progress_bar.pack(fill=tk.X, padx=10, pady=10)
-
-    # Log text area.
-    log_text = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=10)
-    log_text.pack(fill=tk.BOTH, padx=10, pady=10, expand=True)
-
+    top_frame = tk.Frame(main_frame)
+    top_frame.pack(fill=tk.X, padx=5, pady=5)
+    top_frame.columnconfigure(0, weight=3)
+    top_frame.columnconfigure(1, weight=1, minsize=200)
+    job_list_tree = ttk.Treeview(top_frame, columns=("Job ID", "Input File", "Experiment", "Status"),
+                                 show="headings", height=5)
+    job_list_tree.heading("Job ID", text="Job ID")
+    job_list_tree.heading("Input File", text="Input File")
+    job_list_tree.heading("Experiment", text="Experiment")
+    job_list_tree.heading("Status", text="Status")
+    job_list_tree.grid(row=0, column=0, sticky="nsew")
+    control_frame = tk.Frame(top_frame)
+    control_frame.grid(row=0, column=1, sticky="ns", padx=5)
+    new_job_button = ttk.Button(control_frame, text="New Job", command=lambda: start_new_job(root))
+    new_job_button.pack(pady=2, fill=tk.X)
+    stop_all_button = ttk.Button(control_frame, text="Stop All Jobs", command=stop_all_jobs)
+    stop_all_button.pack(pady=2, fill=tk.X)
+    clear_all_button = ttk.Button(control_frame, text="Clear All Jobs", command=clear_all_jobs)
+    clear_all_button.pack(pady=2, fill=tk.X)
+    notebook_frame = tk.Frame(main_frame)
+    notebook_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    notebook = ttk.Notebook(notebook_frame)
+    notebook.pack(fill=tk.BOTH, expand=True)
+    update_jobs_list()
+    def update_ui():
+        for job in jobs_dict.values():
+            ui = job.ui
+            ui["progress_var"].set(job.progress_done)
+            ui["progress_bar"].config(maximum=job.progress_total or 1)
+            if not ui.get("last_log_index"):
+                ui["last_log_index"] = 0
+            new_entries = job.logs[ui["last_log_index"]:]
+            for entry in new_entries:
+                ui["log_text"].insert(tk.END, entry+"\n")
+            ui["last_log_index"] = len(job.logs)
+        root.after(500, update_ui)
+    update_ui()
     root.mainloop()
 
 if __name__ == "__main__":

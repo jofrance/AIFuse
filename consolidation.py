@@ -5,10 +5,11 @@ import re
 import pandas as pd
 from openpyxl.styles import Alignment
 import config
+from log_config import logger
 
 def load_original_cases(file_name):
     cases = {}
-    with open(file_name, 'r', encoding='utf-8') as f:
+    with open(file_name, 'r', encoding='latin-1') as f:
         for line in f:
             line = line.strip()
             if line:
@@ -19,14 +20,16 @@ def load_original_cases(file_name):
                         cases[case_num] = data
                     else:
                         print(f"Warning: No case number found in line: {line}")
+                        logger.info("Warning: No case number found in line: {line}")
                 except json.JSONDecodeError as e:
                     print(f"Warning: Invalid JSON line: {line} Error: {e}")
+                    logger.info("Warning: Invalid JSON line: {line} Error: {e}")
     return cases
 
 def load_error_log(file_name):
     errors = {}
     if os.path.exists(file_name):
-        with open(file_name, 'r', encoding='utf-8') as f:
+        with open(file_name, 'r', encoding='latin-1') as f:
             for line in f:
                 line = line.strip()
                 if line:
@@ -39,10 +42,13 @@ def load_error_log(file_name):
     return errors
 
 def load_api_responses(file_name):
+    if not os.path.exists(file_name) or os.stat(file_name).st_size == 0:
+        # No responses to load — return empty header + dict
+        return None, {}
     responses = {}
     candidates = []  # list of tuples: (row, column_count)
     if os.path.exists(file_name):
-        with open(file_name, 'r', newline='', encoding='utf-8') as f:
+        with open(file_name, 'r', newline='', encoding='latin-1') as f:
             lines = f.readlines()
         import csv
         for line in lines:
@@ -97,7 +103,7 @@ def consolidate_data(original_file, original_cases, error_log, api_header, api_d
         api_header = ["API_Column"]
     consolidated_header = api_header + json_keys + ["Error_Message"]
     consolidated_rows.append(consolidated_header)
-    with open(original_file, 'r', encoding='utf-8') as f:
+    with open(original_file, 'r', encoding='latin-1') as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -121,7 +127,7 @@ def consolidate_data(original_file, original_cases, error_log, api_header, api_d
                 else:
                     row = ["Missing"] * len(api_header) + json_values + [""]
                     consolidated_rows.append(row)
-    with open(output_csv, 'w', newline='', encoding='utf-8') as f:
+    with open(output_csv, 'w', newline='', encoding='latin-1') as f:
         writer = csv.writer(f, quoting=csv.QUOTE_ALL)
         writer.writerows(consolidated_rows)
     print(f"Consolidated CSV written to {output_csv}")

@@ -8,6 +8,9 @@ import processing
 import consolidation
 import utils
 from log_config import logger
+import curses
+from curses_ui import curses_main
+from win_ui import tk_ui_main
 
 def validate_config():
     missing = []
@@ -50,9 +53,9 @@ def consolidation_phase():
     original_file = config.ARGS.file
     original_cases = consolidation.load_original_cases(original_file)
     print(f"Loaded {len(original_cases)} original cases.")
-    error_log = consolidation.load_error_log(config.API_ERROR_LOG_FILE)
+    error_log = consolidation.load_error_log(job.api_error_log_file)
     print(f"Loaded {len(error_log)} error entries.")
-    api_hdr, api_dict = consolidation.load_api_responses(config.API_RESPONSE_FILE)
+    api_hdr, api_dict = consolidation.load_api_responses(job.api_response_file)
     if api_hdr:
         print(f"API header found: {api_hdr}")
         logger.info("API header found.")
@@ -101,8 +104,6 @@ def main():
         consolidation_phase()
     elif config.ARGS.with_curses:
         try:
-            import curses
-            from curses_ui import curses_main
             curses.wrapper(curses_main)
         except Exception as e:
             print(f"Curses UI error: {e}")
@@ -112,7 +113,6 @@ def main():
     else:
         # Default: use Tkinter UI.
         try:
-            from win_ui import tk_ui_main
             tk_ui_main()
         except Exception as e:
             print(f"Error launching Tkinter UI: {e}")

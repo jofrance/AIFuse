@@ -2,6 +2,7 @@ import time
 import threading
 from msal import PublicClientApplication
 import config
+from log_config import logger
 
 scopes=config.scopes
 
@@ -21,8 +22,10 @@ def get_access_token():
             return result["access_token"]
     result = config.msal_app.acquire_token_interactive(scopes)
     if "access_token" in result:
+        logger.info("Got access token.")
         return result["access_token"]
     else:
+        logger.info("Failed to get access token.")
         raise Exception('Failed to get access token')
 
 def refresh_token(stop_event):
@@ -33,7 +36,9 @@ def refresh_token(stop_event):
             with config.token_lock:
                 config.access_token = new_token
             print("Access token refreshed.")
+            logger.info("Access Token refreshed.")
         except Exception as e:
             print(f"Error refreshing access token: {e}")
+            logger.info("Error refreshing access token.")
         stop_event.wait(3600)
 

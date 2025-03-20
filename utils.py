@@ -63,10 +63,10 @@ def check_resume_status():
         total_input = 0
 
     # If the tracking file doesn't exist, or exists but is empty, there's nothing to resume.
-    if not os.path.exists(config.PROCESSED_TRACKING_FILE):
+    if not os.path.exists(job.processed_tracking_file):
         return {"total_input": total_input, "processed_count": 0, "resume_possible": False}
     else:
-        with open(config.PROCESSED_TRACKING_FILE, 'r') as f:
+        with open(job.processed_tracking_file, 'r') as f:
             processed_lines = [line.strip() for line in f if line.strip()]
         processed_count = len(processed_lines)
         # Only allow resume if at least one case has been processed and not all.

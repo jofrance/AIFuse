@@ -86,6 +86,6 @@ def generate_filename(source_file_path, experiment_id, basename, extension):
             content = f.read()
         md5sum = hashlib.md5(content).hexdigest()
     except Exception as e:
-        raise RuntimeError(f"Error reading file {source_file_path}: {e}")
+        raise RuntimeError(f"Error reading file {source_file_path}: {e}") from e
     filename = f"{md5sum}_{experiment_id}_{basename}.{extension}"
     return os.path.join(OUTPUT_DIR, filename)

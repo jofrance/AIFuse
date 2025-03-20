@@ -12,8 +12,8 @@ def curses_main(stdscr):
     curses.curs_set(0)
     # Temporarily disable non-blocking mode for resume prompt:
     stdscr.nodelay(False)
-    config.PROCESSED_TRACKING_FILE = generate_filename(config.ARGS.file, config.experimentId, "processed", "txt")
-    config.API_401_ERROR_TRACKING_FILE = generate_filename(config.ARGS.file, config.experimentId, "401", "txt")
+    job.processed_tracking_file = generate_filename(config.ARGS.file, config.experimentId, "processed", "txt")
+    job.api_401_tracking_file = generate_filename(config.ARGS.file, config.experimentId, "401", "txt")
     # After the prompt, re-enable non-blocking mode for the spinner/UI loop:
     stdscr.nodelay(True)
     spinner_cycle = itertools.cycle(["|", "/", "-", "\\"])
