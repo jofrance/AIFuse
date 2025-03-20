@@ -1,221 +1,190 @@
 # AIFuse
-AI API Processing and Data  Consolidation Tool
 
-# Overall Application Overview
-This  application is an **"Integrated API Processing and Consolidation Tool"** that works in two main phases:
-
-## Processing Phase
-
-- **Input:**  
-  Reads an input JSON file (with one case per line).
-
-- **API Calls:**  
-  For each case, it calls a remote experiment API using token‑based authentication (handled by MSAL).
-
-- **Concurrency:**  
-  Supports threading and batching (with an optional curses‑based UI) to process multiple cases concurrently.
-
-- **Logging/Tracking:**  
-  It logs errors, tracks which cases have been processed, and writes out the API responses (CSV formatted) to intermediate files.
-
-- **Background Token Refresh:**  
-  A background thread continuously refreshes the access token.
-
-## Consolidation Phase
-
-- **Data Loading:**  
-  Loads the original JSON cases, the error log, and the API response CSV file.
-
-- **Merging:**  
-  Merges these data sources to produce a consolidated CSV file that combines the API response columns, all JSON fields, and an error message column (if any).
-
-- **Output Conversion:**  
-  Converts the consolidated CSV into an Excel file using utility functions.
+**AIFuse** is an integrated API processing and data consolidation tool designed to process cases in an isolated, concurrent, and robust manner. The application reads a JSON file (with one case per line), calls a remote AI API for each case, and then consolidates the API responses together with the original case data into a final CSV and Excel output. Each processing job runs independently with its own progress tracking, logging, and file outputs.
 
 ---
 
-# Module-by-Module Breakdown
+## Overall Application Overview
 
-## 1. `__init__.py`
+AIFuse is organized into two primary phases:
 
+1. **Processing Phase:**  
+   - **Input:** Reads a JSON file containing multiple cases.
+   - **API Calls:** For each case, the app calls a remote experiment API using token‑based authentication (handled via MSAL).
+   - **Job Isolation:** Each job (a set of cases) runs independently with its own dedicated files and in‑memory state. This includes independent progress tracking, error logging, and output file generation.
+   - **Concurrency:** Supports multithreading and batching so multiple cases can be processed concurrently.
+   - **Error Handling:** Implements robust error handling and retry logic (including 401, 400, 429, 500, and 502 errors). Both API errors and script errors are logged to dedicated per‑job files.
+   - **Token Refresh:** A background thread refreshes the access token periodically so that API calls remain authenticated throughout processing.
+
+2. **Consolidation Phase:**  
+   - **Data Merging:** Loads the original case data, API response CSVs, and error log files.
+   - **Integration:** Merges all sources into a consolidated CSV file that includes columns for the API responses, all original JSON fields, and any error messages.
+   - **Output Conversion:** Converts the consolidated CSV into an Excel file for easier review.
+
+The tool can run in a headless mode, a curses‑based terminal UI mode, or a full Tkinter graphical UI. In multi‑job mode (via the Tkinter UI), each job runs completely isolated from others—even though they share a common access token.
+
+---
+
+## Module-by-Module Breakdown
+
+### 1. `auth.py`
 - **Purpose:**  
-  Marks the directory as a Python package.
-
-- **Content:**  
-  It is empty (or may contain package initialization code if needed).
-
-## 2. `config.py`
-
-- **Purpose:**  
-  Centralizes configuration and shared state.
-
-- **Defines:**  
-  - **File Paths:**  
-    Both intermediate and final output file paths (e.g., the consolidated CSV, raw API response, error logs, etc.).
-  - **API and MSAL Settings:**  
-    API URL, experiment ID, and timeout.
-  - **Shared Globals:**  
-    Variables like `access_token`, `token_lock`, `api_header`, and `msal_app` are defined here for use by authentication functions.
-  - **Processing State:**  
-    Global counters (`total_cases`, `cases_processed`), locks (`progress_lock`, `details_lock`), and lists (for `processing_details`) for tracking progress.
-  - **Flags for Resume/Retry:**  
-    `resume_mode`, `retry_401_flag`  
-    and a placeholder `ARGS` for command‑line arguments (which is set in `main.py`).
-
-## 3. `auth.py`
-
-- **Purpose:**  
-  Contains functions to obtain and refresh the access token using the MSAL library.
-
+  Manages authentication with the remote API using the Microsoft Authentication Library (MSAL).
 - **Key Functions:**
-  - **`get_access_token()`**  
-    Checks if an MSAL application exists; if not, creates one. Then, it tries to acquire a token silently using existing accounts, and if that fails, acquires it interactively.
-  - **`refresh_token(stop_event)`**  
-    Runs in a background thread, periodically (every 3600 seconds) refreshing the token by calling `get_access_token()` and updating `config.access_token`.
+  - `get_access_token()`:  
+    Initializes the MSAL client (if needed), attempts to acquire a token silently, and falls back to interactive login if necessary.
+  - `refresh_token(stop_event)`:  
+    Runs as a background thread to periodically refresh the access token (every 3600 seconds).
 
-## 4. `processing.py`
-
+### 2. `config.py`
 - **Purpose:**  
-  Handles the processing phase of the application. This includes reading the input file, making API calls, logging progress, and providing a curses‑based user interface (when enabled).
+  Centralizes configuration settings and shared global variables.
+- **Key Items:**
+  - **Paths:**  
+    Defines default paths for outputs (consolidated CSV/Excel, raw API responses, error logs, tracking files).
+  - **API Settings:**  
+    Stores API URL, experiment ID, timeout, and MSAL client details.
+  - **Global State:**  
+    Contains globals for authentication (e.g., `access_token`, `token_lock`) and processing state (e.g., `processing_details`, `progress_lock`).
+  - **Utility Function:**  
+    `generate_filename()` creates consistent file names based on the input file’s MD5 hash, the experiment ID, and a basename.
 
-- **Subsections and Key Functions:**
-
-  ### A. Tracking and File Functions
-  - **`load_processed_cases()` / `update_processed_cases(case_number)`**  
-    Read and update a tracking file that remembers which cases have been processed.
-  - **`load_401_errors()` / `update_401_error(case_number, error_message)` / `clear_401_tracking_file()`**  
-    Handle cases that repeatedly return a 401 error.
-
-  ### B. Curses UI for Resume Option
-  - **`check_resume_option(stdscr)`**  
-    Uses curses to display a prompt (if a processed tracking file exists) and allows the user to choose whether to resume or start fresh; also optionally decides if persistent 401 error cases should be retried.
-
-  ### C. Logging and Progress Helpers
-  - **`append_processing_detail(message)`**  
-    Appends messages to the global list (`config.processing_details`) used by the UI.
-  - **`clear_output_files()`**  
-    Clears intermediate files (raw output, API response, and error logs).
-  - **`log_api_error(message)` / `log_script_error(message)`**  
-    Write error messages to the corresponding log files and also add the message to the processing details list.
-  - **`update_progress()`**  
-    Increments the processed cases counter (`config.cases_processed`) safely using a lock.
-
-  ### D. Input Parsing
-  - **`parse_input_file(file_name)`**  
-    Reads the input JSON file, line by line, parses each JSON object, extracts the case number (using the key `"Incidents_IncidentId"`), and returns a list of tuples.
-
-  ### E. API Call and Error Handling
-  - **`log_and_write_error(case_number, original_data, error_message)`**  
-    Logs an error and updates progress for a given case.
-  - **`call_experiment_api(case_number, original_data)`**  
-    The core function that makes the API call for each case. It:
-    - Uses the shared access token (with proper locking).
-    - Sets up the HTTP headers and JSON payload.
-    - Implements retry logic for various HTTP errors (401, 400, 429, 500, 502).
-    - On success, extracts the CSV text from the API response’s JSON, writes the raw response to one file, and then parses the CSV rows to write them (appending a header if needed) to the API response file.
-    - Calls `append_processing_detail` and updates progress and tracking.
-  
-  ### F. Batch Processing
-  - **`process_batch(batch)`**  
-    Iterates over a batch of cases and calls `call_experiment_api` for each.
-
-  ### G. Main Processing Loop
-  - **`processing_main()`**  
-    Orchestrates the entire processing phase. It:
-    - Checks the resume mode and clears tracking files if starting fresh.
-    - Reads input cases via `parse_input_file`.
-    - Filters out already processed cases if resuming.
-    - Determines whether to use threading and/or batching (based on command‑line arguments stored in `config.ARGS`).
-    - Sets the global `total_cases` and resets `cases_processed`.
-    - Starts the token refresh thread.
-    - Waits until an access token is available.
-    - Dispatches API calls either concurrently (using threads and/or batches) or sequentially.
-    - Finally, sets a stop event for the token thread and waits for it to finish.
-
-  ### H. Curses UI Wrapper
-  - **`curses_main(stdscr)`**  
-    Provides a live UI that shows:
-    - A spinner and elapsed time.
-    - The count of processed cases out of total.
-    - The most recent processing detail messages (from the global list).
-    - It launches `processing_main()` in a separate thread, updates the UI periodically, and waits until processing is complete before exiting.
-
-## 5. `consolidation.py`
-
+### 3. `consolidation.py`
 - **Purpose:**  
-  Implements the consolidation phase by loading data from various sources and merging them.
-
+  Implements the consolidation phase, merging data from different sources.
 - **Key Functions:**
-  - **`load_original_cases(file_name)`**  
-    Reads the original JSON file, parses each line, and builds a dictionary mapping case numbers to their JSON objects.
-  - **`load_error_log(file_name)`**  
-    Reads the API error log file, using a regex to extract the case number, and returns a dictionary mapping case numbers to error messages.
-  - **`load_api_responses(file_name)`**  
-    Reads the API response file (which may contain mixed text and CSV blocks) and collects candidate CSV rows. It determines the most common column count to choose the valid CSV header, then groups rows by the case number (assumed to be in the first column).
-  - **`consolidate_data(original_file, original_cases, error_log, api_header, api_dict, output_csv)`**  
-    Merges the data sources:
-    - It first creates a union (sorted) of all JSON keys found in the original cases.
-    - Then, it builds a final header consisting of the API CSV header plus the JSON keys and an `"Error_Message"` column.
-    - For each case in the original file (maintaining input order), it:
-      - Inserts placeholder values if an error exists for that case.
-      - Otherwise, for each API response row, it appends the corresponding JSON values and an empty error message.
-      - If a case has no API response, it fills in `"Missing"` placeholders.
-    - Finally, it writes out the consolidated CSV file.
+  - `load_original_cases(file_name)`:  
+    Reads the original JSON file, mapping case numbers to their JSON data.
+  - `load_error_log(file_name)`:  
+    Reads the error log file (using a regex to extract case numbers) and returns a dictionary of error messages.
+  - `load_api_responses(file_name)`:  
+    Reads the API response CSV file (handling inconsistent CSV formatting) and groups rows by case number.
+  - `consolidate_data(original_file, original_cases, error_log, api_header, api_dict, output_csv)`:  
+    Combines API responses, JSON data, and error messages into a final CSV file.
 
-## 6. `utils.py`
-
+### 4. `curses_ui.py`
 - **Purpose:**  
-  Contains generic helper functions that are used by the consolidation phase (and potentially elsewhere) to handle CSV files and convert them to Excel.
+  Provides a terminal-based (curses) user interface.
+- **Key Features:**
+  - Displays a live spinner, elapsed time, and counts of processed cases.
+  - Prompts the user for resume/start-fresh options.
+  - Launches processing in a background thread and updates the UI until processing completes.
 
+### 5. `job_manager.py`
+- **Purpose:**  
+  Defines the `Job` class and handles job state persistence.
+- **Key Features:**
+  - **Job Class:**  
+    Represents a processing job, storing its input file, experiment ID, and dedicated file paths for outputs.  
+    New per-job state attributes include:
+    - `progress_total` and `progress_done` (for progress tracking)
+    - `processing_details` (an in-memory log for the job)
+    - `resume_mode` and `retry_401_flag` (for resume and retry behavior)
+  - **Persistence Functions:**  
+    Functions to save, load, and clear job state from disk (as JSON files).
+
+### 6. `log_config.py`
+- **Purpose:**  
+  Configures the application’s logging.
+- **Key Features:**
+  - Sets up logging to both a file and the console.
+  - Ensures that the output directory exists and creates a common application log file (`app.log`).
+
+### 7. `main.py`
+- **Purpose:**  
+  Serves as the entry point for the application.
+- **Key Responsibilities:**
+  - Parses command‑line arguments (input file, threads, batch size, etc.) and sets `config.ARGS`.
+  - Validates configuration values.
+  - Chooses the UI mode (curses, Tkinter, or headless) and launches the processing phase.
+  - After processing, initiates the consolidation phase and converts the consolidated CSV to Excel.
+
+### 8. `processing.py`
+- **Purpose:**  
+  Contains the core logic for the processing phase.
+- **Key Responsibilities:**
+  - **Tracking Functions:**  
+    Functions such as `load_processed_cases()`, `update_processed_cases()`, and error-tracking functions manage per-job tracking files.
+  - **User Prompt:**  
+    `check_resume_option()` uses curses to prompt the user regarding resuming previous runs.
+  - **Logging & Progress:**  
+    Helper functions (`append_processing_detail()`, `log_api_error()`, `log_script_error()`, `update_progress()`) write messages both to per-job in-memory logs and to dedicated files.
+  - **Input Parsing:**  
+    `parse_input_file()` reads the JSON file, extracting case numbers.
+  - **API Calls:**  
+    `call_experiment_api()` (for non-job mode) and `call_experiment_api_job()` (for job mode) perform the API calls with robust error handling and retry logic.
+  - **Batch Processing & Threading:**  
+    Functions to process cases in batches or using threads.
+  - **Processing Loops:**  
+    `processing_main()` handles non-job mode; `processing_main_job(job)` runs a job in isolation, updating progress, writing outputs, and handling errors.
+
+### 9. `utils.py`
+- **Purpose:**  
+  Contains utility functions.
 - **Key Functions:**
-  - **`safe_read_csv(file_name)`**  
-    Reads a CSV file, ensures that each row is padded to have the same number of columns, and returns a Pandas DataFrame.
-  - **`write_csv_to_excel(csv_file, excel_file)`**  
-    Converts a CSV file into an Excel file using Pandas and openpyxl, applying basic formatting (e.g., setting cell number format and alignment).
+  - `safe_read_csv(file_name)`:  
+    Reads a CSV file into a Pandas DataFrame, ensuring that rows have a consistent number of columns.
+  - `write_csv_to_excel(csv_file, excel_file)`:  
+    Converts a CSV file into an Excel file with basic formatting.
+  - `check_resume_status()`:  
+    Determines whether there is a previous run that can be resumed by comparing the total input cases to the number already processed.
 
-## 7. `main.py`
-
+### 10. `win_ui.py`
 - **Purpose:**  
-  Acts as the entry point for the entire application.
-
-- **Key Actions:**
-  - **Argument Parsing:**  
-    Uses argparse to read command‑line arguments (input file, number of threads, batch size, output file names, and an option to disable the curses UI).
-  - **Configuration Assignment:**  
-    Sets `config.ARGS` with the parsed arguments so that other modules (like processing.py) can access them.
-  - **Processing Phase Launch:**  
-    Depending on whether the user has disabled the UI (`--no-ui`), it either calls `processing.processing_main()` directly or wraps `processing.curses_main` with `curses.wrapper`.
-  - **Consolidation Phase Launch:**  
-    After processing completes, it loads the original cases, error log, and API responses; then it calls `consolidation.consolidate_data()` to merge everything into a final CSV, and finally uses `utils.write_csv_to_excel()` to convert that CSV into an Excel file.
-  - **Output:**  
-    It prints messages to indicate the progress of the consolidation phase and that the process is complete.
+  Provides a graphical user interface using Tkinter.
+- **Key Features:**
+  - Displays a list of jobs and their statuses.
+  - Each job runs in its own tab with a dedicated progress bar and log area.
+  - Offers controls to start new jobs, stop all jobs, and clear job state.
+  - Ensures that each job’s UI components (progress bar, log window) update independently from one another.
 
 ---
 
-# Relationships Between Modules
+## Relationships Between Modules
 
-- **`config.py`** is the central repository for configuration constants and shared state. All other modules import from it.
-- **`auth.py`** uses values from `config.py` (such as API settings and token_lock) and is used by `processing.py` to handle authentication.
-- **`processing.py`** contains the bulk of the processing logic and UI. It calls functions from `auth.py` for token management, and it uses the shared state in `config.py` (including command‑line arguments stored in `config.ARGS`).
-- **`consolidation.py`** reads output files generated by `processing.py` and merges data. It also references file names and other configuration settings from `config.py`.
-- **`utils.py`** provides helper functions for handling CSV and Excel files and is used by `consolidation.py` (and possibly other modules).
-- **`main.py`** orchestrates the entire flow by parsing arguments, setting up the shared configuration, and calling the processing and consolidation phases.
+- **Configuration and Globals:**  
+  `config.py` centralizes settings and shared global state (e.g., token, file paths). Other modules import this to access configuration data.
+
+- **Authentication:**  
+  `auth.py` manages token acquisition and refresh and relies on configuration from `config.py`.
+
+- **Job Management & Isolation:**  
+  The `Job` class (in `job_manager.py`) encapsulates per-job state (files, progress, logs). Both `processing.py` and `win_ui.py` interact with Job objects to ensure isolated processing.
+
+- **Processing & Consolidation:**  
+  `processing.py` handles case processing (API calls, error handling, progress updates) and writes intermediate files. Once processing is complete, `consolidation.py` reads these files to merge the original case data, API responses, and errors into a final output.  
+  - `utils.py` supports consolidation by providing CSV-to-Excel conversion functions.
+
+- **User Interfaces:**  
+  Two separate UIs exist:
+  - **Curses UI (curses_ui.py):** Provides a terminal-based interface for processing.
+  - **Tkinter UI (win_ui.py):** Allows for multi-job management, showing each job’s progress and logs in separate tabs.
+
+- **Entry Point:**  
+  `main.py` ties everything together by parsing command‑line arguments, validating configuration, and launching either a UI or headless processing mode, followed by consolidation.
+
+---
+
+## Summary
+
+AIFuse is a comprehensive tool for processing case data through API calls and consolidating the results into a final, reviewable format. Its key features:
+
+- **Isolated Job Processing:**  
+  Each job is managed independently with dedicated files and in‑memory state, ensuring that errors, progress, and outputs remain isolated between jobs.
+
+- **Robust Concurrency:**  
+  The tool supports multithreading and batching to process cases quickly, with careful management of a shared authentication token.
+
+- **Error Handling and Logging:**  
+  Errors are tracked and logged both to dedicated files and to per‑job in‑memory logs, ensuring that every processed case (whether successful or erroneous) is accounted for.
+
+- **Flexible User Interfaces:**  
+  With both a curses‑based UI and a full Tkinter GUI, users can monitor processing in real time, manage multiple jobs, and consolidate the results into CSV and Excel outputs.
+
+- **Modular Design:**  
+  The application is organized into clear modules (configuration, authentication, job management, processing, consolidation, utilities, and UI) that interact in a well‑defined manner, facilitating both maintenance and future enhancements.
+
 
 ---
 
-# Summary
-
-- The application starts in **`main.py`**, which parses the command‑line arguments and stores them in `config.ARGS`.
-- **Processing Phase (`processing.py`):**
-  - Reads and filters input cases, manages progress tracking, and makes API calls (using `auth.py` for token management).
-  - Uses a curses‑based UI (if enabled) to prompt the user and display real‑time progress.
-  - Writes API responses and error logs to intermediate files.
-- **Consolidation Phase (`consolidation.py`):**
-  - Loads original JSON data, error logs, and API responses, and merges them into a final consolidated CSV.
-  - Then, `utils.py` is used to convert the CSV into an Excel file.
-- Shared settings and global variables are managed in **`config.py`** so that every module can access the necessary configuration without duplication.
-- **`auth.py`** is solely responsible for authentication.
-- **`main.py`** ties it all together.
-
----
 
