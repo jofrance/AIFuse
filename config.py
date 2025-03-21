@@ -6,8 +6,14 @@ import hashlib
 def load_configuration(config_file='config.ini'):
     """Load configuration settings from an INI file."""
     parser = configparser.ConfigParser()
-    parser.read(config_file)
+    parser.optionxform = str  # Preserve key case
+    parser.read(config_file)    
     return parser
+
+    
+    
+    
+    
 
 # Load the configuration from config.ini.
 CONFIG = load_configuration()

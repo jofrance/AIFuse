@@ -36,8 +36,10 @@ def update_jobs_list():
     # Retrieve experiments mapping from config preserving original casing
     experiments = {}
     if hasattr(config, "CONFIG") and config.CONFIG.has_section("Experiments"):
-        for key in config.CONFIG.options("Experiments"):
-            experiments[key] = config.CONFIG.get("Experiments", key)
+        #for key in config.CONFIG.options("Experiments"):
+         #   experiments[key] = config.CONFIG.get("Experiments", key)
+        for key, value in config.CONFIG.items("Experiments"):
+            experiments[key] = value
     # Reverse mapping: experiment ID -> experiment friendly name
     exp_name_map = {v: k for k, v in experiments.items()}
     for job in jobs_dict.values():
@@ -155,7 +157,7 @@ def save_job_results(job):
             messagebox.showerror("Error", f"Failed to save file for Job {job.job_id[:8]}: {e}")
 
 def start_new_job(main_window):
-    print("JOBS_DICT KEYS:", list(jobs_dict.keys()))
+    #print("JOBS_DICT KEYS:", list(jobs_dict.keys()))
     for job in jobs_dict.values():
         print(f"→ Job {job.job_id[:8]} | logs length={len(job.logs)} | progress={job.progress_done}/{job.progress_total}")
 
@@ -163,7 +165,11 @@ def start_new_job(main_window):
     if not file_selected:
         messagebox.showerror("Error", "No input file selected. Job cancelled.", parent=main_window)
         return
-    prompt_for_experiment_selection(main_window)
+    selected_experiment = prompt_for_experiment_selection(main_window)
+    if selected_experiment is None:
+        messagebox.showinfo("Cancelled", "Experiment selection cancelled. Job not started.", parent=main_window)
+        return
+    config.experimentId = selected_experiment
     experiment_id = config.experimentId
     file_md5 = get_input_file_md5(file_selected)
     duplicate = None
@@ -180,7 +186,7 @@ def start_new_job(main_window):
     jobs_dict[job.job_id] = job
     update_jobs_list()
     create_job_tab(job)
-    print("🔸 After start_new_job(), jobs_dict keys:", list(jobs_dict.keys()))
+    #print("🔸 After start_new_job(), jobs_dict keys:", list(jobs_dict.keys()))
 
     
     def run_job():
@@ -281,21 +287,31 @@ def prompt_for_experiment_selection(root):
     dialog.lift()
     dialog.focus_force()
     dialog.grab_set()
+
     content_frame = tk.Frame(dialog)
     content_frame.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
+
     label = tk.Label(content_frame, text="Please select an experiment:")
     label.pack(pady=10)
+
     experiments = {}
     if hasattr(config, "CONFIG") and config.CONFIG.has_section("Experiments"):
-        for key in config.CONFIG.options("Experiments"):
-            experiments[key] = config.CONFIG.get("Experiments", key)
+        for key, value in config.CONFIG.items("Experiments"):
+            experiments[key] = value
     if not experiments:
         dialog.destroy()
-        return
+        return None  # No experiments available
+
     experiment_var = tk.StringVar()
+
+    # Adjust combobox width to fit the longest experiment name
+    max_length = max(len(s) for s in experiments.keys())
     combobox = ttk.Combobox(content_frame, textvariable=experiment_var,
-                              values=list(experiments.keys()), state="readonly")
+                              values=list(experiments.keys()), state="readonly",
+                              width=max_length + 2)
     combobox.pack(pady=10)
+
+    # Pre-select current experiment if available
     default_name = None
     for name, exp_id in experiments.items():
         if exp_id == config.experimentId:
@@ -305,22 +321,41 @@ def prompt_for_experiment_selection(root):
         combobox.set(default_name)
     else:
         combobox.current(0)
-        config.experimentId = experiments[combobox.get()]
+
+    # Frame for buttons, placed horizontally
+    button_frame = tk.Frame(content_frame)
+    button_frame.pack(pady=10)
+
+    # Dictionary to store the result
+    result = {"experiment": None}
+
     def on_ok():
         selected = experiment_var.get()
         if selected in experiments:
-            config.experimentId = experiments[selected]
+            result["experiment"] = experiments[selected]
         dialog.destroy()
-    ok_button = ttk.Button(content_frame, text="OK", command=on_ok)
-    ok_button.pack(pady=10)
+
+    def on_cancel():
+        result["experiment"] = None
+        dialog.destroy()
+
+    ok_button = ttk.Button(button_frame, text="OK", command=on_ok)
+    ok_button.pack(side=tk.LEFT, padx=10)
+
+    cancel_button = ttk.Button(button_frame, text="Cancel", command=on_cancel)
+    cancel_button.pack(side=tk.LEFT, padx=10)
+
+    # Center the dialog
     dialog.update_idletasks()
     screen_width = dialog.winfo_screenwidth()
     screen_height = dialog.winfo_screenheight()
     x = (screen_width // 2) - (fixed_width // 2)
     y = (screen_height // 2) - (fixed_height // 2)
     dialog.geometry(f"{fixed_width}x{fixed_height}+{x}+{y}")
+
     dialog.wait_window()
-    return
+    return result["experiment"]
+
 
 def tk_ui_main():
     global job_list_tree, notebook
@@ -354,6 +389,8 @@ def tk_ui_main():
     stop_all_button.pack(pady=2, fill=tk.X)
     clear_all_button = ttk.Button(control_frame, text="Clear All Jobs", command=clear_all_jobs)
     clear_all_button.pack(pady=2, fill=tk.X)
+    quit_button = ttk.Button(control_frame, text="Quit", command=root.destroy)
+    quit_button.pack(pady=2, fill=tk.X)
     notebook_frame = tk.Frame(main_frame)
     notebook_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
     notebook = ttk.Notebook(notebook_frame)
