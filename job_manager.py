@@ -25,14 +25,18 @@ class Job:
         self.script_error_log_file = ""
         self.consolidated_csv = ""
         self.consolidated_excel = ""
-        
-        # New per-job state attributes:
+        self.consolidated_txt = ""
+
+        # per-job state attributes:
         self.api_header = None
         self.total_cases = 0
         self.cases_processed = 0
         self.processing_details = []
         self.resume_mode = False       # Add this line
         self.retry_401_flag = False    # And this line
+        
+        # NEW: Consolidation lock for TXT mode
+        self.consolidation_lock = threading.Lock()
         
         # Placeholder for UI components in the Tkinter tab
         self.ui = {}
@@ -100,14 +104,14 @@ if not os.path.exists(JOBS_STATE_DIR):
 
 def save_job_state(job: Job):
     file_path = os.path.join(JOBS_STATE_DIR, f"{job.job_id}.json")
-    with open(file_path, "w", encoding="utf-8") as f:
+    with open(file_path, "w", encoding="latin-1") as f:
         json.dump(job.to_dict(), f, indent=4)
 
 def load_all_jobs():
     jobs = {}
     for filename in os.listdir(JOBS_STATE_DIR):
         if filename.endswith(".json"):
-            with open(os.path.join(JOBS_STATE_DIR, filename), "r", encoding="utf-8") as f:
+            with open(os.path.join(JOBS_STATE_DIR, filename), "r", encoding="latin-1") as f:
                 data = json.load(f)
                 job = Job.from_dict(data)
                 jobs[job.job_id] = job

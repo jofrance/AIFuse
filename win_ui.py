@@ -10,6 +10,7 @@ import consolidation
 import utils
 from config import generate_filename
 from job_manager import Job, get_input_file_md5, save_job_state, load_all_jobs, clear_job_state
+from log_config import logger
 
 # Global dictionary to manage jobs: job_id -> Job object
 jobs_dict = {}
@@ -55,6 +56,9 @@ def create_job_tab(job):
     progress_var = tk.DoubleVar(value=job.progress_done)
     progress_bar = ttk.Progressbar(tab, variable=progress_var, maximum=job.progress_total or 1)
     progress_bar.pack(fill=tk.X, padx=5, pady=5)
+    # Progress label
+    progress_label = ttk.Label(tab, text=f"{job.progress_done} of {job.progress_total} cases processed")
+    progress_label.pack(fill=tk.X, padx=5, pady=5)
     # Log text area (manual scrolling)
     log_text = scrolledtext.ScrolledText(tab, wrap=tk.WORD, height=10)
     log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -75,6 +79,7 @@ def create_job_tab(job):
     job.ui = {
         "progress_var": progress_var,
         "progress_bar": progress_bar,
+        "progress_label": progress_label,
         "log_text": log_text,
         "cancel_button": stop_button,
         "resume_button": resume_button,
@@ -136,16 +141,27 @@ def resume_job(job_id):
     threading.Thread(target=run_resumed_job, daemon=True).start()
 
 def save_job_results(job):
+    if job.parsing_method.upper() == "TXT":
+        default_file = job.consolidated_txt
+        title = "Save Consolidated Text File As"
+        file_types = [("Text Files", "*.txt")]
+        extension = ".txt"
+    else:
+        default_file = job.consolidated_excel
+        title = "Save Consolidated Excel File As"
+        file_types = [("Excel Files", "*.xlsx")]
+        extension = ".xlsx"
+
     dest_file = filedialog.asksaveasfilename(
-        title="Save Consolidated Excel File As",
-        defaultextension=".xlsx",
-        filetypes=[("Excel Files", "*.xlsx")],
-        initialfile=os.path.basename(job.consolidated_excel)
+        title=title,
+        defaultextension=extension,
+        filetypes=file_types,
+        initialfile=os.path.basename(default_file)
     )
     if dest_file:
         try:
-            shutil.copy(job.consolidated_excel, dest_file)
-            messagebox.showinfo("Success", f"Excel file saved successfully for Job {job.job_id[:8]}.")
+            shutil.copy(default_file, dest_file)
+            messagebox.showinfo("Success", f"File saved successfully for Job {job.job_id[:8]}.")
             job.status = "finished"
             job.log("Job output saved. Clearing job from UI.")
             update_jobs_list()
@@ -157,7 +173,7 @@ def save_job_results(job):
             messagebox.showerror("Error", f"Failed to save file for Job {job.job_id[:8]}: {e}")
 
 def start_new_job(main_window):
-    #print("JOBS_DICT KEYS:", list(jobs_dict.keys()))
+    print("JOBS_DICT KEYS:", list(jobs_dict.keys()))
     for job in jobs_dict.values():
         print(f"→ Job {job.job_id[:8]} | logs length={len(job.logs)} | progress={job.progress_done}/{job.progress_total}")
 
@@ -165,15 +181,27 @@ def start_new_job(main_window):
     if not file_selected:
         messagebox.showerror("Error", "No input file selected. Job cancelled.", parent=main_window)
         return
+    logger.info("File Selected:" + file_selected )
+
+    # Prompt for experiment selection and capture its return value.
     selected_experiment = prompt_for_experiment_selection(main_window)
     if selected_experiment is None:
         messagebox.showinfo("Cancelled", "Experiment selection cancelled. Job not started.", parent=main_window)
         return
+    logger.info("Experiment Selected:" + selected_experiment )
+
+    # Update configuration (or directly pass to the Job)
     config.experimentId = selected_experiment
     experiment_id = config.experimentId
-    file_md5 = get_input_file_md5(file_selected)
-    duplicate = None
 
+    # Prompt for parsing method if needed...
+    selected_parsing = prompt_for_parsing_method(main_window)
+    if selected_parsing is None:
+        messagebox.showinfo("Cancelled", "Parsing method selection cancelled. Job not started.", parent=main_window)
+        return
+    logger.info("Experiment Parsing:" + selected_parsing )
+
+    # Create a new job and assign file paths.
     job = Job(file_selected, experiment_id)
     job.processed_tracking_file = unique_job_filename(job.input_file, job.experiment_id, "processed", "txt", job.job_id)
     job.api_401_tracking_file = unique_job_filename(job.input_file, job.experiment_id, "401", "txt", job.job_id)
@@ -181,14 +209,24 @@ def start_new_job(main_window):
     job.api_response_file = unique_job_filename(job.input_file, job.experiment_id, "APIResponse", "csv", job.job_id)
     job.api_error_log_file = unique_job_filename(job.input_file, job.experiment_id, "APIError", "log", job.job_id)
     job.script_error_log_file = unique_job_filename(job.input_file, job.experiment_id, "ScriptError", "log", job.job_id)
-    job.consolidated_csv = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "csv", job.job_id)
-    job.consolidated_excel = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "xlsx", job.job_id)
+    #job.consolidated_csv = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "csv", job.job_id)
+    #job.consolidated_excel = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "xlsx", job.job_id)
+    job.parsing_method = selected_parsing  # e.g., "CSV" or "TXT"
+
+    if job.parsing_method.upper() == "TXT":
+        job.log("Plain Text consolidation Selected.")
+        job.consolidated_txt = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "txt", job.job_id)
+        job.consolidation_lock = threading.Lock()
+    else:
+        job.consolidated_csv = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "csv", job.job_id)
+        job.consolidated_excel = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "xlsx", job.job_id)
+
     jobs_dict[job.job_id] = job
     update_jobs_list()
     create_job_tab(job)
-    #print("🔸 After start_new_job(), jobs_dict keys:", list(jobs_dict.keys()))
+    print("🔸 After start_new_job(), jobs_dict keys:", list(jobs_dict.keys()))
 
-    
+    # Continue to run the job in a background thread...
     def run_job():
         processing.processing_main_job(job)
         if not job.cancel_event.is_set():
@@ -198,21 +236,43 @@ def start_new_job(main_window):
             job.log(f"Loaded {len(original_cases)} original cases.")
             error_log = consolidation.load_error_log(job.api_error_log_file)
             job.log(f"Loaded {len(error_log)} error entries.")
-            api_hdr, api_dict = consolidation.load_api_responses(job.api_response_file)
-            if api_hdr:
-                job.log(f"API header found: {api_hdr}")
+        
+            if job.parsing_method.upper() == "CSV":
+                job.log("CSV consolidation Selected.")
+                api_hdr, api_dict = consolidation.load_api_responses(job.api_response_file)
+                if api_hdr:
+                    job.log(f"API header found: {api_hdr}")
+                else:
+                   job.log("No API header found; using default placeholder.")
+                total_api_rows = sum(len(v) for v in api_dict.values())
+                job.log(f"Loaded {total_api_rows} API response entries.")
+                consolidation.consolidate_data(job.input_file, original_cases, error_log,
+                                               api_hdr, api_dict, job.consolidated_csv)
+                utils.write_csv_to_excel(job.consolidated_csv, job.consolidated_excel)
+                job.log("CSV consolidation complete.")
+            elif job.parsing_method.upper() == "TXT":
+                job.log("Plain Text consolidation complete.")
             else:
-                job.log("No API header found; using default placeholder.")
-            total_api_rows = sum(len(v) for v in api_dict.values())
-            job.log(f"Loaded {total_api_rows} API response entries.")
-            consolidation.consolidate_data(job.input_file, original_cases, error_log,
-                                           api_hdr, api_dict, job.consolidated_csv)
-            utils.write_csv_to_excel(job.consolidated_csv, job.consolidated_excel)
+                job.log("Unknown parsing method. Defaulting to CSV consolidation.")
+                api_hdr, api_dict = consolidation.load_api_responses(job.api_response_file)
+                if api_hdr:
+                    job.log(f"API header found: {api_hdr}")
+                else:
+                    job.log("No API header found; using default placeholder.")
+                total_api_rows = sum(len(v) for v in api_dict.values())
+                job.log(f"Loaded {total_api_rows} API response entries.")
+                consolidation.consolidate_data(job.input_file, original_cases, error_log,
+                                               api_hdr, api_dict, job.consolidated_csv)
+                utils.write_csv_to_excel(job.consolidated_csv, job.consolidated_excel)
+                job.log("CSV consolidation complete.")
+        
             job.log("Consolidation phase complete.")
             job.ui["save_button"].config(state=tk.NORMAL)
         save_job_state(job)
         update_jobs_list()
+
     threading.Thread(target=run_job, daemon=True).start()
+
 
 def stop_all_jobs():
     for job in list(jobs_dict.values()):
@@ -294,6 +354,7 @@ def prompt_for_experiment_selection(root):
     label = tk.Label(content_frame, text="Please select an experiment:")
     label.pack(pady=10)
 
+    # Get experiments preserving original case
     experiments = {}
     if hasattr(config, "CONFIG") and config.CONFIG.has_section("Experiments"):
         for key, value in config.CONFIG.items("Experiments"):
@@ -304,34 +365,32 @@ def prompt_for_experiment_selection(root):
 
     experiment_var = tk.StringVar()
 
-    # Adjust combobox width to fit the longest experiment name
+    # Set combobox width to fit longest experiment name
     max_length = max(len(s) for s in experiments.keys())
     combobox = ttk.Combobox(content_frame, textvariable=experiment_var,
                               values=list(experiments.keys()), state="readonly",
                               width=max_length + 2)
     combobox.pack(pady=10)
 
-    # Pre-select current experiment if available
-    default_name = None
+    # Pre-select the current experiment if present in config
+    current_exp = None
+    # Try to match config.experimentId with one of the experiment values
     for name, exp_id in experiments.items():
         if exp_id == config.experimentId:
-            default_name = name
+            current_exp = name
             break
-    if default_name:
-        combobox.set(default_name)
+    if current_exp:
+        combobox.set(current_exp)
     else:
         combobox.current(0)
 
-    # Frame for buttons, placed horizontally
-    button_frame = tk.Frame(content_frame)
-    button_frame.pack(pady=10)
-
-    # Dictionary to store the result
+    # Dictionary to capture the result.
     result = {"experiment": None}
 
     def on_ok():
-        selected = experiment_var.get()
+        selected = experiment_var.get()  # This returns the friendly name.
         if selected in experiments:
+            # Return the experiment ID corresponding to the chosen friendly name.
             result["experiment"] = experiments[selected]
         dialog.destroy()
 
@@ -339,9 +398,11 @@ def prompt_for_experiment_selection(root):
         result["experiment"] = None
         dialog.destroy()
 
+    # Place OK and Cancel buttons side-by-side
+    button_frame = tk.Frame(content_frame)
+    button_frame.pack(pady=10)
     ok_button = ttk.Button(button_frame, text="OK", command=on_ok)
     ok_button.pack(side=tk.LEFT, padx=10)
-
     cancel_button = ttk.Button(button_frame, text="Cancel", command=on_cancel)
     cancel_button.pack(side=tk.LEFT, padx=10)
 
@@ -356,6 +417,74 @@ def prompt_for_experiment_selection(root):
     dialog.wait_window()
     return result["experiment"]
 
+
+def prompt_for_parsing_method(root):
+    fixed_width = 400
+    fixed_height = 200
+    dialog = tk.Toplevel(root)
+    dialog.title("Select Parsing Method")
+    dialog.geometry(f"{fixed_width}x{fixed_height}")
+    dialog.transient(root)
+    dialog.lift()
+    dialog.focus_force()
+    dialog.grab_set()
+    
+    content_frame = tk.Frame(dialog)
+    content_frame.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
+    
+    label = tk.Label(content_frame, text="Please select a parsing method:")
+    label.pack(pady=10)
+    
+    # Get parsing methods from config
+    parsing_methods = {}
+    if hasattr(config, "CONFIG") and config.CONFIG.has_section("Parsing"):
+        for key, value in config.CONFIG.items("Parsing"):
+            parsing_methods[key] = value  # e.g. "Comma Separated": "CSV"
+    if not parsing_methods:
+        dialog.destroy()
+        return None  # No parsing methods available.
+    
+    parsing_var = tk.StringVar()
+    max_length = max(len(s) for s in parsing_methods.keys())
+    combobox = ttk.Combobox(content_frame, textvariable=parsing_var,
+                              values=list(parsing_methods.keys()), state="readonly",
+                              width=max_length + 2)
+    combobox.pack(pady=10)
+    
+    # Pre-select the first one
+    combobox.current(0)
+    
+    # Use a dict to capture the result.
+    result = {"parsing": None}
+    
+    def on_ok():
+        selected = parsing_var.get()
+        if selected in parsing_methods:
+            result["parsing"] = parsing_methods[selected]
+        dialog.destroy()
+    
+    def on_cancel():
+        result["parsing"] = None
+        dialog.destroy()
+    
+    # Place OK and Cancel buttons side by side.
+    button_frame = tk.Frame(content_frame)
+    button_frame.pack(pady=10)
+    ok_button = ttk.Button(button_frame, text="OK", command=on_ok)
+    ok_button.pack(side=tk.LEFT, padx=10)
+    cancel_button = ttk.Button(button_frame, text="Cancel", command=on_cancel)
+    cancel_button.pack(side=tk.LEFT, padx=10)
+    
+    # Center the dialog
+    dialog.update_idletasks()
+    screen_width = dialog.winfo_screenwidth()
+    screen_height = dialog.winfo_screenheight()
+    x = (screen_width // 2) - (fixed_width // 2)
+    y = (screen_height // 2) - (fixed_height // 2)
+    dialog.geometry(f"{fixed_width}x{fixed_height}+{x}+{y}")
+    
+    dialog.wait_window()
+    return result["parsing"]
 
 def tk_ui_main():
     global job_list_tree, notebook
@@ -401,6 +530,7 @@ def tk_ui_main():
             ui = job.ui
             ui["progress_var"].set(job.progress_done)
             ui["progress_bar"].config(maximum=job.progress_total or 1)
+            ui["progress_label"].config(text=f"{job.progress_done} of {job.progress_total} cases processed")
             if not ui.get("last_log_index"):
                 ui["last_log_index"] = 0
             new_entries = job.logs[ui["last_log_index"]:]

@@ -14,7 +14,7 @@ logging.basicConfig(
     level=logging.INFO,  # Set default logging level (adjust as needed)
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8"),
+        logging.FileHandler(LOG_FILE, mode="a", encoding="latin-1"),
         logging.StreamHandler()  # Optional: also output to console
     ]
 )

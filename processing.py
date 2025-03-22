@@ -520,16 +520,24 @@ def call_experiment_api_job(job, case_number, original_data):
         },
         "MaxNumberOfRows": 5000
     }
+
     max_retries = 3
     attempt = 0
     success = False
     response = None
+    error_message = None
+    content_to_write = None
+
     while attempt < max_retries and not success:
         if job.cancel_event.is_set():
             job.log(f"Job cancelled during API call for case {case_number}.")
             return
         try:
-            response = requests.post(f'{config.apiUrl}experiment/{job.experiment_id}', headers=headers, data=json.dumps(run_model), timeout=config.API_TIMEOUT)
+            response = requests.post(
+                f'{config.apiUrl}experiment/{job.experiment_id}',
+                headers=headers, data=json.dumps(run_model),
+                timeout=config.API_TIMEOUT
+            )
             if response.status_code == 200:
                 success = True
                 break
@@ -537,11 +545,8 @@ def call_experiment_api_job(job, case_number, original_data):
                 job.log(f"Case {case_number}: Received 401 error. Retrying in 5 seconds (attempt {attempt+1}/{max_retries}).")
                 time.sleep(5)
             elif response.status_code == 400:
-                error_message = f"Error 400: {response.text} for case {case_number}"
-                log_api_error(job, error_message)
-                update_progress(job)
-                update_processed_cases(job, case_number)
-                return
+                error_message = f"Error 400: {response.text} for case {case_number}"                
+                break
             elif response.status_code == 429:
                 match = re.search(r"Try again in (\d+) seconds", response.text)
                 wait_time = int(match.group(1)) if match else 60
@@ -552,11 +557,8 @@ def call_experiment_api_job(job, case_number, original_data):
                 job.log(f"Case {case_number}: Received {response.status_code}. Retrying in 5 seconds (attempt {attempt+1}/{max_retries}).")
                 time.sleep(5)
             else:
-                error_message = f"Error {response.status_code}: {response.text} for case {case_number}"
-                log_api_error(job, error_message)
-                update_progress(job)
-                update_processed_cases(job, case_number)
-                return
+                error_message = f"Error {response.status_code}: {response.text} for case {case_number}"                
+                break
         except requests.exceptions.Timeout as te:
             job.log(f"Case {case_number}: Timeout occurred: {te}. Retrying in 5 seconds (attempt {attempt+1}/{max_retries}).")
             time.sleep(5)
@@ -566,42 +568,59 @@ def call_experiment_api_job(job, case_number, original_data):
         attempt += 1
 
     if not success:
-        if response is not None and response.status_code == 401:
-            error_message = f"Error 401: {response.text} for case {case_number} after {max_retries} attempts."
-            update_401_error(job, case_number, error_message)
-            update_progress(job)
-        else:
-            if response is not None:
+        if not error_message:
+            if response is not None and response.status_code == 401:
+                error_message = f"Error 401: {response.text} for case {case_number} after {max_retries} attempts."
+                update_401_error(job, case_number, error_message)
+            elif response is not None:
                 error_message = f"Error {response.status_code}: {response.text} for case {case_number} after {max_retries} attempts."
             else:
                 error_message = f"Failed to get a successful response for case {case_number} after {max_retries} attempts."
         log_api_error(job, error_message)
-        update_progress(job)
-        update_processed_cases(job, case_number)
-        return
 
-    try:
-        response_content = response.json()
-        content_to_write = (response_content["chatHistory"]["messages"][1]["content"]).replace("\\n", "\n")
-        if not content_to_write:
-            raise ValueError(f"No content found in API response for case {case_number}.")
-        with open(job.raw_output_file, 'a') as file:
-            file.write(content_to_write)
-        csv_reader = csv.reader(content_to_write.splitlines())
-        rows = list(csv_reader)
-        if not rows:
-            raise ValueError(f"No CSV rows found in API response for case {case_number}.")
-        if not os.path.exists(job.api_response_file) or os.stat(job.api_response_file).st_size == 0:
+    else:
+        try:
+            response_content = response.json()
+            content_to_write = (response_content["chatHistory"]["messages"][1]["content"]).replace("\\n", "\n")
+            if not content_to_write:
+                raise ValueError(f"No content found in API response for case {case_number}.")
+        except Exception as e:
+            error_message = f"Exception while processing case {case_number}: {e}"
+            job.log(error_message)
+            log_api_error(job, error_message)
+
+    if job.parsing_method.upper() == "TXT":
+        from consolidation import consolidate_case_txt  # import at top in real code
+        consolidate_case_txt(
+            job=job,
+            case_number=case_number,
+            original_line=original_data,
+            api_output=content_to_write,
+            error_message=error_message
+        )
+        if success and content_to_write:
+            job.log(f"Output written for case {case_number}.")
+    
+    if success and job.parsing_method.upper() == "CSV":
+        try:
+            with open(job.raw_output_file, 'a') as file:
+                file.write(content_to_write)
+            csv_reader = csv.reader(content_to_write.splitlines())
+            rows = list(csv_reader)
+            if not rows:
+                raise ValueError(f"No CSV rows found in API response for case {case_number}.")
+            if not os.path.exists(job.api_response_file) or os.stat(job.api_response_file).st_size == 0:
+                with open(job.api_response_file, 'a', newline='') as file:
+                    writer = csv.writer(file, quoting=csv.QUOTE_ALL)
+                    writer.writerow(rows[0])
             with open(job.api_response_file, 'a', newline='') as file:
                 writer = csv.writer(file, quoting=csv.QUOTE_ALL)
-                writer.writerow(rows[0])
-        with open(job.api_response_file, 'a', newline='') as file:
-            writer = csv.writer(file, quoting=csv.QUOTE_ALL)
-            for row in rows[1:]:
-                writer.writerow(row)
-        job.log(f"Output written for case {case_number}.")
-        update_progress(job)
-        update_processed_cases(job, case_number)
-    except Exception as e:
-        job.log(f"Exception while processing case {case_number}: {e}")
-        update_processed_cases(job, case_number)
+                for row in rows[1:]:
+                    writer.writerow(row)
+            job.log(f"Output written for case {case_number}.")
+        except Exception as e:
+            job.log(f"Exception while processing case {case_number}: {e}")
+            log_script_error(job, str(e))
+
+    update_progress(job)
+    update_processed_cases(job, case_number)

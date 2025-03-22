@@ -132,3 +132,128 @@ def consolidate_data(original_file, original_cases, error_log, api_header, api_d
         writer.writerows(consolidated_rows)
     print(f"Consolidated CSV written to {output_csv}")
 
+def load_original_cases_txt(input_file):
+    """
+    Load original cases from the input file.
+    Returns a dictionary mapping case numbers to their JSON objects.
+    """
+    cases = {}
+    with open(input_file, 'r', encoding='latin-1') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    data = json.loads(line)
+                    case_num = data.get("Incidents_IncidentId", "").strip()
+                    if case_num:
+                        cases[case_num] = data
+                except json.JSONDecodeError as e:
+                    logger.info(f"Invalid JSON line: {line} Error: {e}")
+    return cases
+
+def load_error_log_txt(error_log_file):
+    """
+    Loads error log into a dictionary keyed by case number.
+    Assumes each error line contains 'for case <case_number>'.
+    """
+    errors = {}
+    if os.path.exists(error_log_file):
+        with open(error_log_file, 'r', encoding='latin-1') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    m = re.search(r'for case (\S+)', line)
+                    if m:
+                        case_num = m.group(1)
+                        errors[case_num] = line
+                    else:
+                        logger.info(f"Could not extract case number from error: {line}")
+    return errors
+
+def load_api_responses_txt(api_response_file):
+    """
+    Loads API responses for TXT consolidation.
+    Assumes that the file contains blocks delimited by a line with "-----"
+    and that each block starts with "Case <case_number>:".
+    Returns a dictionary mapping case numbers to the entire block.
+    """
+    responses = {}
+    if os.path.exists(api_response_file):
+        with open(api_response_file, 'r', encoding='latin-1') as f:
+            content = f.read()
+        # Split blocks on a line that contains only hyphens
+        blocks = re.split(r'\n*-info\ note*\n', content)
+        for block in blocks:
+            block = block.strip()
+            if block:
+                # The first line should be like "Case 123:"
+                first_line = block.splitlines()[0]
+                m = re.match(r'Case\s+(\S+):', first_line)
+                if m:
+                    case_num = m.group(1)
+                    responses[case_num] = block
+                else:
+                    logger.info(f"Block does not start with case header: {block}")
+    return responses
+
+def simple_txt_consolidator(input_file, error_log_file, api_response_file, output_txt):
+    """
+    Consolidate TXT parsing:
+      - For each case in the original input file,
+      - Write a block:
+          Case <case_number>:
+          <API response block or error message>
+          ----------------------------------------------
+    """
+    original = load_original_cases_txt(input_file)
+    errors = load_error_log_txt(error_log_file)
+    responses = load_api_responses_txt(api_response_file)
+
+    with open(output_txt, 'w', encoding='latin-1') as out:
+        for case_num in original:
+            out.write(f"Case {case_num}:\n")
+            if case_num in responses:
+                out.write(responses[case_num] + "\n")
+            elif case_num in errors:
+                out.write(errors[case_num] + "\n")
+            else:
+                out.write("No API response or error found.\n")
+            out.write("\n" + "-"*50 + "\n\n")
+    print(f"TXT consolidation written to {output_txt}")
+
+import json
+from log_config import logger
+
+def consolidate_case_txt(job, case_number, original_line, api_output, error_message):
+    print(f"[DEBUG] Writing TXT consolidation for case {case_number} to file: {job.consolidated_txt}")
+    """
+    Immediately consolidates a single case for TXT mode.
+    Writes a block containing:
+      - The case header,
+      - Original case data (pretty-printed if possible),
+      - Either the API response (if available) or the error message,
+      - A separator line.
+    """
+    try:
+        original_data = json.loads(original_line)
+        original_str = json.dumps(original_data, indent=2)
+    except Exception as e:
+        logger.info(f"Error parsing original data for case {case_number}: {e}")
+        original_str = original_line
+
+    block = f"Case {case_number}:\n"
+    block += "Original Data:\n" + original_str + "\n\n"
+    if api_output:
+        block += "API Response:\n" + api_output + "\n"
+    elif error_message:
+        block += "Error:\n" + error_message + "\n"
+    else:
+        block += "No API response or error found.\n"
+    block += "\n" + "-" * 50 + "\n\n"
+
+    # Write the block with thread safety.
+    with job.consolidation_lock:
+        with open(job.consolidated_txt, 'a', encoding='latin-1') as f:
+            f.write(block)
+
+

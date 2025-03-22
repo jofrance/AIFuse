@@ -8,7 +8,7 @@ from openpyxl.styles import Alignment
 def safe_read_csv(file_name):
     rows = []
     max_cols = 0
-    with open(file_name, 'r', newline='', encoding='utf-8') as f:
+    with open(file_name, 'r', newline='', encoding='latin-1') as f:
         reader = csv.reader(f)
         for row in reader:
             rows.append(row)
