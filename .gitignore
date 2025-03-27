@@ -1,5 +1,8 @@
 # Custom APP Files
 ./Results
+chat2.py
+chat3.py
+authMI.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

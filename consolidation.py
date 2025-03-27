@@ -221,9 +221,6 @@ def simple_txt_consolidator(input_file, error_log_file, api_response_file, outpu
             out.write("\n" + "-"*50 + "\n\n")
     print(f"TXT consolidation written to {output_txt}")
 
-import json
-from log_config import logger
-
 def consolidate_case_txt(job, case_number, original_line, api_output, error_message):
     print(f"[DEBUG] Writing TXT consolidation for case {case_number} to file: {job.consolidated_txt}")
     """

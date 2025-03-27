@@ -141,9 +141,12 @@ def resume_job(job_id):
     threading.Thread(target=run_resumed_job, daemon=True).start()
 
 def save_job_results(job):
-    if job.parsing_method.upper() == "TXT":
+    if job.parsing_method.upper() in ("TXT", "JSON"):
         default_file = job.consolidated_txt
-        title = "Save Consolidated Text File As"
+        if job.parsing_method.upper() == "TXT":
+            title = "Save Consolidated Text File As"
+        else:
+            title = "Save Consolidated JSON File As"
         file_types = [("Text Files", "*.txt")]
         extension = ".txt"
     else:
@@ -171,6 +174,7 @@ def save_job_results(job):
             update_jobs_list()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save file for Job {job.job_id[:8]}: {e}")
+
 
 def start_new_job(main_window):
     print("JOBS_DICT KEYS:", list(jobs_dict.keys()))
@@ -217,6 +221,10 @@ def start_new_job(main_window):
         job.log("Plain Text consolidation Selected.")
         job.consolidated_txt = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "txt", job.job_id)
         job.consolidation_lock = threading.Lock()
+    elif job.parsing_method.upper() == "JSON":
+        job.log("JSON consolidation Selected.")
+        job.consolidated_txt = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "txt", job.job_id)
+        job.consolidation_lock = threading.Lock()    
     else:
         job.consolidated_csv = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "csv", job.job_id)
         job.consolidated_excel = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "xlsx", job.job_id)
@@ -252,6 +260,8 @@ def start_new_job(main_window):
                 job.log("CSV consolidation complete.")
             elif job.parsing_method.upper() == "TXT":
                 job.log("Plain Text consolidation complete.")
+            elif job.parsing_method.upper() == "JSON":
+                job.log("JSON consolidation complete.")
             else:
                 job.log("Unknown parsing method. Defaulting to CSV consolidation.")
                 api_hdr, api_dict = consolidation.load_api_responses(job.api_response_file)
@@ -266,7 +276,7 @@ def start_new_job(main_window):
                 utils.write_csv_to_excel(job.consolidated_csv, job.consolidated_excel)
                 job.log("CSV consolidation complete.")
         
-            job.log("Consolidation phase complete.")
+            #job.log("Consolidation phase complete.")
             job.ui["save_button"].config(state=tk.NORMAL)
         save_job_state(job)
         update_jobs_list()
@@ -420,7 +430,7 @@ def prompt_for_experiment_selection(root):
 
 def prompt_for_parsing_method(root):
     fixed_width = 400
-    fixed_height = 200
+    fixed_height = 300  # Increased height to display explanation text
     dialog = tk.Toplevel(root)
     dialog.title("Select Parsing Method")
     dialog.geometry(f"{fixed_width}x{fixed_height}")
@@ -435,11 +445,11 @@ def prompt_for_parsing_method(root):
     label = tk.Label(content_frame, text="Please select a parsing method:")
     label.pack(pady=10)
     
-    # Get parsing methods from config
+    # Get parsing methods from config.PARSING_CONFIG
     parsing_methods = {}
-    if hasattr(config, "CONFIG") and config.CONFIG.has_section("Parsing"):
-        for key, value in config.CONFIG.items("Parsing"):
-            parsing_methods[key] = value  # e.g. "Comma Separated": "CSV"
+    if hasattr(config, "PARSING_CONFIG") and config.PARSING_CONFIG.has_section("Parsing"):
+        for key, value in config.PARSING_CONFIG.items("Parsing"):
+            parsing_methods[key] = value
     if not parsing_methods:
         dialog.destroy()
         return None  # No parsing methods available.
@@ -451,8 +461,21 @@ def prompt_for_parsing_method(root):
                               width=max_length + 2)
     combobox.pack(pady=10)
     
-    # Pre-select the first one
+    # Pre-select the first option.
     combobox.current(0)
+    
+    # Create a label to display explanation text.
+    explanation_label = tk.Label(content_frame, text="", wraplength=fixed_width-40, justify=tk.LEFT)
+    explanation_label.pack(pady=10)
+    
+    def update_explanation(event=None):
+        selection = parsing_var.get()
+        explanation = config.PARSING_CONFIG.get("ParsingExplanations", selection,
+                                                 fallback="No explanation available for this method.")
+        explanation_label.config(text=explanation)
+    
+    combobox.bind("<<ComboboxSelected>>", update_explanation)
+    update_explanation()  # Set initial explanation.
     
     # Use a dict to capture the result.
     result = {"parsing": None}
@@ -475,7 +498,7 @@ def prompt_for_parsing_method(root):
     cancel_button = ttk.Button(button_frame, text="Cancel", command=on_cancel)
     cancel_button.pack(side=tk.LEFT, padx=10)
     
-    # Center the dialog
+    # Center the dialog on the screen.
     dialog.update_idletasks()
     screen_width = dialog.winfo_screenwidth()
     screen_height = dialog.winfo_screenheight()
@@ -486,6 +509,33 @@ def prompt_for_parsing_method(root):
     dialog.wait_window()
     return result["parsing"]
 
+
+def tk_ui_main():
+    import tkinter as tk
+from tkinter import ttk
+import chat
+# ... other imports ...
+
+# Global variable to keep track of the chat window.
+chat_window = None
+
+def open_chat_from_button(root, chat_button):
+    global chat_window
+    # If there's no chat window open, or it has been destroyed:
+    if chat_window is None or not tk.Toplevel.winfo_exists(chat_window):
+        chat_window = chat.open_chat_window(root)
+        # Disable the chat button while the chat window is open.
+        chat_button.config(state=tk.DISABLED)
+        # Bind a protocol handler so that when the chat window closes, the chat button is re-enabled.
+        chat_window.protocol("WM_DELETE_WINDOW", lambda: on_chat_close(chat_window, chat_button))
+
+def on_chat_close(window, chat_button):
+    global chat_window
+    window.destroy()
+    chat_button.config(state=tk.NORMAL)
+    chat_window = None
+
+# Inside your tk_ui_main() function (where you create the control_frame), add:
 def tk_ui_main():
     global job_list_tree, notebook
     if config.ARGS is None:
@@ -518,6 +568,9 @@ def tk_ui_main():
     stop_all_button.pack(pady=2, fill=tk.X)
     clear_all_button = ttk.Button(control_frame, text="Clear All Jobs", command=clear_all_jobs)
     clear_all_button.pack(pady=2, fill=tk.X)
+    # Add Chat button:
+    chat_button = ttk.Button(control_frame, text="Chat", command=lambda: open_chat_from_button(root, chat_button))
+    chat_button.pack(pady=2, fill=tk.X)
     quit_button = ttk.Button(control_frame, text="Quit", command=root.destroy)
     quit_button.pack(pady=2, fill=tk.X)
     notebook_frame = tk.Frame(main_frame)
@@ -540,6 +593,24 @@ def tk_ui_main():
         root.after(500, update_ui)
     update_ui()
     root.mainloop()
+
+
+def open_chat_from_button(root, chat_button):
+    global chat_window
+    # If there's no chat window open, or it has been destroyed:
+    if chat_window is None or not tk.Toplevel.winfo_exists(chat_window):
+        chat_window = chat.open_chat_window(root)
+        # Disable the chat button while the chat window is open.
+        chat_button.config(state=tk.DISABLED)
+        # Bind a protocol handler so that when the chat window closes, the chat button is re-enabled.
+        chat_window.protocol("WM_DELETE_WINDOW", lambda: on_chat_close(chat_window, chat_button))
+
+def on_chat_close(window, chat_button):
+    global chat_window
+    window.destroy()
+    chat_button.config(state=tk.NORMAL)
+    chat_window = None
+    #chat.open_chat_window(root)
 
 if __name__ == "__main__":
     tk_ui_main()

@@ -7,13 +7,8 @@ def load_configuration(config_file='config.ini'):
     """Load configuration settings from an INI file."""
     parser = configparser.ConfigParser()
     parser.optionxform = str  # Preserve key case
-    parser.read(config_file)    
+    parser.read(config_file)
     return parser
-
-    
-    
-    
-    
 
 # Load the configuration from config.ini.
 CONFIG = load_configuration()
@@ -54,6 +49,13 @@ API_401_ERROR_TRACKING_FILE = os.path.join(
 apiUrl = CONFIG.get('API', 'apiUrl', fallback='https://zebra-ai-api-prd.azurewebsites.net/')
 experimentId = CONFIG.get('API', 'experimentId', fallback='582c5e80-b307-43f9-bc86-efd0a6551907')
 API_TIMEOUT = CONFIG.getint('API', 'API_TIMEOUT', fallback=30)
+##### For Managed Identity #####
+#APP_CLIENT_ID = CONFIG.get('API', 'APP_CLIENT_ID', fallback='https://zebra-ai-api-prd.azurewebsites.net/')
+#RESOURCE_TENANT_ID = CONFIG.get('API', 'RESOURCE_TENANT_ID', fallback='https://zebra-ai-api-prd.azurewebsites.net/')
+#AZURE_REGION = CONFIG.get('API', 'AZURE_REGION', fallback='https://zebra-ai-api-prd.azurewebsites.net/')
+#MI_CLIENT_ID = CONFIG.get('API', 'MI_CLIENT_ID', fallback='https://zebra-ai-api-prd.azurewebsites.net/')
+#AUDIENCE = CONFIG.get('API', 'AUDIENCE', fallback='https://zebra-ai-api-prd.azurewebsites.net/')
+##### For Managed Identity #####
 
 # --- Authentication Settings ---
 client_id = CONFIG.get('Authentication', 'client_id', fallback='751c47e2-782e-4d75-b304-37f68a9d45fd')
@@ -95,3 +97,28 @@ def generate_filename(source_file_path, experiment_id, basename, extension):
         raise RuntimeError(f"Error reading file {source_file_path}: {e}") from e
     filename = f"{md5sum}_{experiment_id}_{basename}.{extension}"
     return os.path.join(OUTPUT_DIR, filename)
+
+# --- Parsing Methods Configuration ---
+PARSING_CONFIG_FILE = "parsing_explanations.ini"
+PARSING_CONFIG = configparser.ConfigParser()
+PARSING_CONFIG.optionxform = str  # Preserve key case
+if os.path.exists(PARSING_CONFIG_FILE):
+    PARSING_CONFIG.read(PARSING_CONFIG_FILE)
+    # Validate that both sections have at least one value.
+    if not PARSING_CONFIG.has_section("Parsing") or not list(PARSING_CONFIG.items("Parsing")):
+        raise ValueError(f"'{PARSING_CONFIG_FILE}' must contain at least one value in the [Parsing] section.")
+    if not PARSING_CONFIG.has_section("ParsingExplanations") or not list(PARSING_CONFIG.items("ParsingExplanations")):
+        raise ValueError(f"'{PARSING_CONFIG_FILE}' must contain at least one value in the [ParsingExplanations] section.")
+else:
+    # Fallback defaults if the file does not exist.
+    PARSING_CONFIG.read_dict({
+        "Parsing": {
+            "TXT": "TXT",
+            "JSON": "JSON"
+        },
+        "ParsingExplanations": {
+            "TXT": "Parses plain text output from the API.",
+            "JSON": "Returns the complete JSON response from the API."
+        }
+    })
+

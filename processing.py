@@ -155,14 +155,21 @@ def update_progress(job):
     with config.progress_lock:
         job.progress_done += 1
 
-# --- Input File Parsing ---
 def parse_input_file(file_name):
+    import os, json
     cases = []
+    _, ext = os.path.splitext(file_name)
     try:
-        with open(file_name, 'r') as file:
+        with open(file_name, 'r', encoding='latin-1') as file:
             for line in file:
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                if ext.lower() == ".txt":
+                    # For .txt files, assume each line is the case number.
+                    case_number = line
+                    cases.append((case_number, line))
+                else:
                     try:
                         data = json.loads(line)
                         case_number = data.get("Incidents_IncidentId", "").strip()
@@ -176,6 +183,7 @@ def parse_input_file(file_name):
         log_script_error(None, f"Error reading file {file_name}: {e}")
     return cases
 
+
 # --- Revised Error Logging ---
 def log_and_write_error(job, case_number, original_data, error_message):
     log_api_error(job, error_message)
@@ -183,7 +191,7 @@ def log_and_write_error(job, case_number, original_data, error_message):
     update_progress(job)
     update_processed_cases(job, case_number)
 
-# --- API Call Function (Non-job version remains unchanged) ---
+# --- API Call Function (Non-job Version) ---
 def call_experiment_api(case_number, original_data):
     with config.token_lock:
         token = config.access_token
@@ -514,9 +522,13 @@ def call_experiment_api_job(job, case_number, original_data):
         'Accept': 'application/json'
     }
     run_model = {
+        #"dataSearchKey": "CaseNumber",
         "DataSearchOptions": {
-            "Search": case_number,
-            "SearchMode": "any"
+            #"Search": case_number,
+            "Search": "*",
+            "SearchFields": "",
+            "SearchMode": "any",
+            "Filter": f"(IsEUSchrems eq false) and (CaseNumber eq '{case_number}')"
         },
         "MaxNumberOfRows": 5000
     }
@@ -545,7 +557,7 @@ def call_experiment_api_job(job, case_number, original_data):
                 job.log(f"Case {case_number}: Received 401 error. Retrying in 5 seconds (attempt {attempt+1}/{max_retries}).")
                 time.sleep(5)
             elif response.status_code == 400:
-                error_message = f"Error 400: {response.text} for case {case_number}"                
+                error_message = f"Error 400: {response.text} for case {case_number}"
                 break
             elif response.status_code == 429:
                 match = re.search(r"Try again in (\d+) seconds", response.text)
@@ -581,13 +593,28 @@ def call_experiment_api_job(job, case_number, original_data):
     else:
         try:
             response_content = response.json()
-            content_to_write = (response_content["chatHistory"]["messages"][1]["content"]).replace("\\n", "\n")
+            if job.parsing_method.upper() == "JSON":
+                content_to_write = json.dumps(response_content, indent=2)
+            else:
+                content_to_write = (response_content["chatHistory"]["messages"][-1]["content"]).replace("\\n", "\n")
             if not content_to_write:
                 raise ValueError(f"No content found in API response for case {case_number}.")
         except Exception as e:
             error_message = f"Exception while processing case {case_number}: {e}"
             job.log(error_message)
             log_api_error(job, error_message)
+
+    if job.parsing_method.upper() == "JSON":
+        from consolidation import consolidate_case_txt  # this part consolidates as if was a txt at this time
+        consolidate_case_txt(
+            job=job,
+            case_number=case_number,
+            original_line=original_data,
+            api_output=content_to_write,
+            error_message=error_message
+        )
+        if success and content_to_write:
+            job.log(f"Output written for case {case_number}.")    
 
     if job.parsing_method.upper() == "TXT":
         from consolidation import consolidate_case_txt  # import at top in real code
