@@ -4,6 +4,7 @@ import json
 import os
 import hashlib
 import config
+import time
 
 class Job:
     def __init__(self, input_file, experiment_id):
@@ -32,8 +33,8 @@ class Job:
         self.total_cases = 0
         self.cases_processed = 0
         self.processing_details = []
-        self.resume_mode = False       # Add this line
-        self.retry_401_flag = False    # And this line
+        self.resume_mode = False       # Indicates if the job should resume from saved progress
+        self.retry_401_flag = False    # For handling repeated 401 errors
         
         # NEW: Consolidation lock for TXT mode
         self.consolidation_lock = threading.Lock()
@@ -41,13 +42,17 @@ class Job:
         # Placeholder for UI components in the Tkinter tab
         self.ui = {}
 
+        # New attributes for resumption
+        self.parsing_method = "CSV"    # Default to CSV if not set externally
+        self.start_time = time.time()  # When the job started
+
     def log(self, message):
-        import time
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
         self.logs.append(log_entry)
 
     def to_dict(self):
+        # Convert the job state to a dictionary for persistence.
         return {
             "job_id": self.job_id,
             "input_file": self.input_file,
@@ -66,6 +71,12 @@ class Job:
             "script_error_log_file": self.script_error_log_file,
             "consolidated_csv": self.consolidated_csv,
             "consolidated_excel": self.consolidated_excel,
+            "consolidated_txt": self.consolidated_txt,
+            # Additional state for resumption
+            "parsing_method": self.parsing_method,
+            "start_time": self.start_time,
+            "resume_mode": self.resume_mode,
+            "retry_401_flag": self.retry_401_flag
         }
 
     @classmethod
@@ -85,7 +96,14 @@ class Job:
         job.script_error_log_file = data.get("script_error_log_file", "")
         job.consolidated_csv = data.get("consolidated_csv", "")
         job.consolidated_excel = data.get("consolidated_excel", "")
-        job.cancel_event = threading.Event()  # New event on load
+        job.consolidated_txt = data.get("consolidated_txt", "")
+        # Reinitialize threading event (do not persist the event object)
+        job.cancel_event = threading.Event()
+        # Restore additional state; if not found, assign default values.
+        job.parsing_method = data.get("parsing_method", "CSV")
+        job.start_time = data.get("start_time", time.time())
+        job.resume_mode = data.get("resume_mode", False)
+        job.retry_401_flag = data.get("retry_401_flag", False)
         return job
 
 def get_input_file_md5(input_file):

@@ -9,21 +9,28 @@ from log_config import logger
 
 def load_original_cases(file_name):
     cases = {}
+    ext = os.path.splitext(file_name)[1].lower()
     with open(file_name, 'r', encoding='latin-1') as f:
         for line in f:
             line = line.strip()
             if line:
-                try:
-                    data = json.loads(line)
-                    case_num = data.get("Incidents_IncidentId", "").strip()
-                    if case_num:
-                        cases[case_num] = data
-                    else:
-                        print(f"Warning: No case number found in line: {line}")
-                        logger.info("Warning: No case number found in line: {line}")
-                except json.JSONDecodeError as e:
-                    print(f"Warning: Invalid JSON line: {line} Error: {e}")
-                    logger.info("Warning: Invalid JSON line: {line} Error: {e}")
+                if ext == ".txt":
+                    # For text files, assume each line is the case number.
+                    case_num = line
+                    # Create a minimal data structure for compatibility.
+                    cases[case_num] = {"Incidents_IncidentId": case_num, "raw": line}
+                else:
+                    try:
+                        data = json.loads(line)
+                        case_num = data.get("Incidents_IncidentId", "").strip()
+                        if case_num:
+                            cases[case_num] = data
+                        else:
+                            print(f"Warning: No case number found in line: {line}")
+                            logger.info("Warning: No case number found in line: {line}")
+                    except json.JSONDecodeError as e:
+                        print(f"Warning: Invalid JSON line: {line} Error: {e}")
+                        logger.info("Warning: Invalid JSON line: {line} Error: {e}")
     return cases
 
 def load_error_log(file_name):

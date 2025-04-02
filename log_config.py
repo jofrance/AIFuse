@@ -11,6 +11,7 @@ LOG_FILE = os.path.join(OUTPUT_DIR, "app.log")
 
 # Configure the logging.
 logging.basicConfig(
+    #level=logging.DEBUG,  # Set default logging level (adjust as needed)
     level=logging.INFO,  # Set default logging level (adjust as needed)
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[

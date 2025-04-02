@@ -109,7 +109,6 @@ def check_resume_option(stdscr, job):
 # --- Logging and Progress Helpers ---
 def append_processing_detail(job, message):
     if job is not None:
-        # Append to the job's processing details and log via its log method.
         if not hasattr(job, 'processing_details'):
             job.processing_details = []
         job.processing_details.append(message)
@@ -130,18 +129,15 @@ def clear_output_files(job):
     logger.info("Output files cleared.")
     
 def log_api_error(job, message):
-    # Debug print: verify that the job and file path are valid.
     if job is not None:
         print(f"[DEBUG] Writing error to file: {job.api_error_log_file}")
     else:
         print("[DEBUG] log_api_error called with job=None")
-    
     try:
         with open(job.api_error_log_file, 'a') as file:
             file.write(message + "\n")
     except Exception as e:
         print(f"[DEBUG] Exception when writing error: {e}")
-    
     append_processing_detail(job, message)
     print(message, file=sys.stderr)
 
@@ -166,7 +162,6 @@ def parse_input_file(file_name):
                 if not line:
                     continue
                 if ext.lower() == ".txt":
-                    # For .txt files, assume each line is the case number.
                     case_number = line
                     cases.append((case_number, line))
                 else:
@@ -183,7 +178,6 @@ def parse_input_file(file_name):
         log_script_error(None, f"Error reading file {file_name}: {e}")
     return cases
 
-
 # --- Revised Error Logging ---
 def log_and_write_error(job, case_number, original_data, error_message):
     log_api_error(job, error_message)
@@ -191,7 +185,7 @@ def log_and_write_error(job, case_number, original_data, error_message):
     update_progress(job)
     update_processed_cases(job, case_number)
 
-# --- API Call Function (Non-job Version) ---
+# --- API Call Function (Non-job version remains unchanged) ---
 def call_experiment_api(case_number, original_data):
     with config.token_lock:
         token = config.access_token
@@ -254,20 +248,18 @@ def call_experiment_api(case_number, original_data):
     if not success:
         if response is not None and response.status_code == 401:
             error_message = f"Error 401: {response.text} for case {case_number} after {max_retries} attempts."
+        elif response is not None:
+            error_message = f"Error {response.status_code}: {response.text} for case {case_number} after {max_retries} attempts."
         else:
-            if response is not None:
-                error_message = f"Error {response.status_code}: {response.text} for case {case_number} after {max_retries} attempts."
-            else:
-                error_message = f"Failed to get a successful response for case {case_number} after {max_retries} attempts."
+            error_message = f"Failed to get a successful response for case {case_number} after {max_retries} attempts."
         log_and_write_error(None, case_number, original_data, error_message)
         return
 
     try:
         response_content = response.json()
-        content_to_write = (response_content["chatHistory"]["messages"][1]["content"]).replace("\\n", "\n")
+        content_to_write = (response_content["chatHistory"]["messages"][-1]["content"]).replace("\\n", "\n")
         if not content_to_write:
             raise ValueError(f"No content found in API response for case {case_number}.")
-        # In non-job mode, use the global RAW_OUTPUT_FILE and API_RESPONSE_FILE
         with open(config.RAW_OUTPUT_FILE, 'a') as file:
             file.write(content_to_write)
         csv_reader = csv.reader(content_to_write.splitlines())
@@ -324,7 +316,6 @@ def processing_main():
             all_cases = parse_input_file(file_name)
             retry_cases = [case for case in all_cases if case[0] in retry_cases_set]
             cases = retry_cases + cases
-
     if not cases:
         print("No valid cases found or all cases have been processed in the input file.")
         sys.exit(1)
@@ -385,11 +376,7 @@ def processing_main():
 def processing_main_job(job):
     # ——— ISOLATE PER-JOB STATE ———
     job.api_header = None
-    #job.progress_total = len(cases)
-    #job.progress_done = 0
     job.processing_details = []
-    # Also, assume job.resume_mode and job.retry_401_flag exist as per-job flags.
-    #
     # Redirect global file paths to the job's own paths:
     config.PROCESSED_TRACKING_FILE   = job.processed_tracking_file
     config.API_401_ERROR_TRACKING_FILE = job.api_401_tracking_file
@@ -397,8 +384,6 @@ def processing_main_job(job):
     config.API_RESPONSE_FILE         = job.api_response_file
     config.API_ERROR_LOG_FILE        = job.api_error_log_file
     config.SCRIPT_ERROR_LOG_FILE     = job.script_error_log_file
-    # ———————————————————————————————
-    from config import generate_filename
     if not job.resume_mode:
         if os.path.exists(job.processed_tracking_file):
             os.remove(job.processed_tracking_file)
@@ -417,19 +402,22 @@ def processing_main_job(job):
     cases = parse_input_file(file_name)
     if job.resume_mode:
         processed = load_processed_cases(job)
-        cases = [case for case in cases if case[0] not in processed]
-        if job.retry_401_flag:
-            with open(job.api_401_tracking_file, 'r') as f:
-                retry_cases_set = set(line.strip() for line in f if line.strip())
-            all_cases = parse_input_file(file_name)
-            retry_cases = [case for case in all_cases if case[0] in retry_cases_set]
-            cases = retry_cases + cases
+        remaining_cases = [case for case in cases if case[0] not in processed]
+        # Preserve original total: if not already stored, save it now.
+        if not hasattr(job, "initial_total") or job.initial_total == 0:
+            job.initial_total = len(cases)
+        job.progress_total = job.initial_total
+        # Do not reset progress_done; it should reflect already processed cases.
+        cases = remaining_cases
+    else:
+        job.progress_total = len(cases)
+        job.progress_done = 0
+        job.initial_total = len(cases)
+        
     if not cases:
         job.log("No valid cases found or all cases have been processed in the input file.")
         return
     
-    job.progress_total = len(cases)
-    job.progress_done = 0
     stop_event = threading.Event()
     token_thread = threading.Thread(target=refresh_token, args=(stop_event,), daemon=True)
     token_thread.start()
@@ -522,17 +510,14 @@ def call_experiment_api_job(job, case_number, original_data):
         'Accept': 'application/json'
     }
     run_model = {
-        #"dataSearchKey": "CaseNumber",
         "DataSearchOptions": {
-            #"Search": case_number,
-            "Search": "*",
-            "SearchFields": "",
+            "Search": "",
             "SearchMode": "any",
             "Filter": f"(IsEUSchrems eq false) and (CaseNumber eq '{case_number}')"
         },
         "MaxNumberOfRows": 5000
     }
-
+    
     max_retries = 3
     attempt = 0
     success = False
@@ -550,6 +535,7 @@ def call_experiment_api_job(job, case_number, original_data):
                 headers=headers, data=json.dumps(run_model),
                 timeout=config.API_TIMEOUT
             )
+            logger.debug(f"Raw API response for case {case_number} (attempt {attempt+1}): {response.text}")            
             if response.status_code == 200:
                 success = True
                 break
@@ -569,7 +555,7 @@ def call_experiment_api_job(job, case_number, original_data):
                 job.log(f"Case {case_number}: Received {response.status_code}. Retrying in 5 seconds (attempt {attempt+1}/{max_retries}).")
                 time.sleep(5)
             else:
-                error_message = f"Error {response.status_code}: {response.text} for case {case_number}"                
+                error_message = f"Error {response.status_code}: {response.text} for case {case_number}"
                 break
         except requests.exceptions.Timeout as te:
             job.log(f"Case {case_number}: Timeout occurred: {te}. Retrying in 5 seconds (attempt {attempt+1}/{max_retries}).")
@@ -589,23 +575,45 @@ def call_experiment_api_job(job, case_number, original_data):
             else:
                 error_message = f"Failed to get a successful response for case {case_number} after {max_retries} attempts."
         log_api_error(job, error_message)
-
     else:
         try:
             response_content = response.json()
             if job.parsing_method.upper() == "JSON":
                 content_to_write = json.dumps(response_content, indent=2)
             else:
-                content_to_write = (response_content["chatHistory"]["messages"][-1]["content"]).replace("\\n", "\n")
+                # Check if the expected keys exist
+                if ("chatHistory" in response_content and 
+                    "messages" in response_content["chatHistory"] and 
+                    len(response_content["chatHistory"]["messages"]) > 0):
+                    # Use the last message's content
+                    content_raw = response_content["chatHistory"]["messages"][-1].get("content")
+                    if content_raw is None:
+                        raise ValueError("Expected 'content' key is missing in the last message.")
+                    content_to_write = content_raw.replace("\\n", "\n")
+                else:
+                    raise ValueError("The API response does not contain the expected chatHistory/messages structure.")
+            
             if not content_to_write:
                 raise ValueError(f"No content found in API response for case {case_number}.")
         except Exception as e:
             error_message = f"Exception while processing case {case_number}: {e}"
             job.log(error_message)
             log_api_error(job, error_message)
+#        try:
+#            response_content = response.json()
+#            if job.parsing_method.upper() == "JSON":
+#                content_to_write = json.dumps(response_content, indent=2)
+#            else:
+#                content_to_write = (response_content["chatHistory"]["messages"][-1]["content"]).replace("\\n", "\n")
+#            if not content_to_write:
+#                raise ValueError(f"No content found in API response for case {case_number}.")
+#        except Exception as e:
+#            error_message = f"Exception while processing case {case_number}: {e}"
+#            job.log(error_message)
+#            log_api_error(job, error_message)
 
     if job.parsing_method.upper() == "JSON":
-        from consolidation import consolidate_case_txt  # this part consolidates as if was a txt at this time
+        from consolidation import consolidate_case_txt
         consolidate_case_txt(
             job=job,
             case_number=case_number,
@@ -615,9 +623,8 @@ def call_experiment_api_job(job, case_number, original_data):
         )
         if success and content_to_write:
             job.log(f"Output written for case {case_number}.")    
-
-    if job.parsing_method.upper() == "TXT":
-        from consolidation import consolidate_case_txt  # import at top in real code
+    elif job.parsing_method.upper() == "TXT":
+        from consolidation import consolidate_case_txt
         consolidate_case_txt(
             job=job,
             case_number=case_number,
@@ -627,8 +634,7 @@ def call_experiment_api_job(job, case_number, original_data):
         )
         if success and content_to_write:
             job.log(f"Output written for case {case_number}.")
-    
-    if success and job.parsing_method.upper() == "CSV":
+    elif success and job.parsing_method.upper() == "CSV":
         try:
             with open(job.raw_output_file, 'a') as file:
                 file.write(content_to_write)
