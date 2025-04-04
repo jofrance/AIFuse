@@ -87,7 +87,7 @@ def create_job_tab(job):
     log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
     
     # Stop Job button
-    stop_button = ttk.Button(tab, text="Stop Job",
+    stop_button = ttk.Button(tab, text="Pause Job",
                              command=lambda job_id=job.job_id: cancel_job(job_id))
     stop_button.pack(side=tk.LEFT, padx=5, pady=5)
     
@@ -247,6 +247,9 @@ def open_configuration_window(root):
 
     # Loop through each section in the config file.
     for section in cp.sections():
+        if section.lower() in ["parsing", "parsingexplanations"]:
+            continue  # Skip these sections
+        # Create a frame for each section.
         frame = tk.Frame(nb)
         nb.add(frame, text=section)
         row = 0
@@ -306,8 +309,8 @@ def open_configuration_window(root):
                 cancel_btn.pack(side=tk.LEFT, padx=10)
                 add_win.transient(config_win)
                 add_win.grab_set()
-            add_exp_button = ttk.Button(add_button_frame, text="Add Experiment", command=add_experiment, width=1 )
-            add_exp_button.pack(fill=tk.X)
+            add_exp_button = ttk.Button(add_button_frame, text="Add Experiment", command=add_experiment, width=15)
+            add_exp_button.pack(padx=5, pady=5)  # Remove fill=tk.X to avoid stretching
         else:
             # For non-Experiments sections, simply create Label and Entry.
             for key, value in cp.items(section):
@@ -323,24 +326,117 @@ def open_configuration_window(root):
     bottom_frame.pack(side=tk.BOTTOM, pady=10)
 
     def save_config():
+        # First, clear experiment entries from CP so removed ones don't persist
+        if cp.has_section("Experiments"):
+            # Get all keys in the Experiments section
+            experiment_keys = [key for key in cp.options("Experiments")]
+            # Remove all experiment keys from the ConfigParser
+            for key in experiment_keys:
+                cp.remove_option("Experiments", key)
+                
+        # Now update with current entries from the UI
         for (section, key), widget in entries.items():
+            # Make sure the section exists
+            if not cp.has_section(section):
+                cp.add_section(section)
+                
             # For experiments section, widget is a tuple (label, entry, remove_button)
             if isinstance(widget, tuple):
                 cp.set(section, key, widget[1].get())
             else:
                 cp.set(section, key, widget.get())
+                    
+        # Create a merged config before writing
+        merged_config = configparser.ConfigParser()
+        merged_config.optionxform = str  # Preserve case sensitivity
+        
+        # First read existing config file (if any)
+        merged_config.read(config_file)
+        
+        # IMPORTANT: Remove the Experiments section entirely from merged_config
+        # to ensure deleted experiments don't come back
+        if merged_config.has_section("Experiments"):
+            merged_config.remove_section("Experiments")
+        if cp.has_section("Experiments"):
+            merged_config.add_section("Experiments")
+        
+        # Now update with all sections from cp
+        for section in cp.sections():
+            if not merged_config.has_section(section):
+                merged_config.add_section(section)
+            for key, value in cp.items(section):
+                merged_config.set(section, key, value)
+                
+        # IMPORTANT: Preserve the original Parsing section instead of using hardcoded values
+        # Only create default values if it doesn't exist in either place
+        if not merged_config.has_section('Parsing') and not config.PARSING_CONFIG.has_section('Parsing'):
+            merged_config.add_section('Parsing')
+            # Use the values that match the original at app startup
+            merged_config.set('Parsing', 'Comma Separated', 'CSV')
+            merged_config.set('Parsing', 'Plain Text', 'TXT')
+            merged_config.set('Parsing', 'API Full JSON', 'JSON')
+        elif config.PARSING_CONFIG.has_section('Parsing'):
+            # Copy from the original PARSING_CONFIG if it exists
+            if not merged_config.has_section('Parsing'):
+                merged_config.add_section('Parsing')
+            for key, value in config.PARSING_CONFIG.items('Parsing'):
+                merged_config.set('Parsing', key, value)
+                
+        # Do the same for ParsingExplanations
+        if not merged_config.has_section('ParsingExplanations') and not config.PARSING_CONFIG.has_section('ParsingExplanations'):
+            merged_config.add_section('ParsingExplanations')
+            merged_config.set('ParsingExplanations', 'Comma Separated', 'Process data in CSV format with Excel output')
+            merged_config.set('ParsingExplanations', 'Plain Text', 'Process data in plain text format')
+            merged_config.set('ParsingExplanations', 'API Full JSON', 'Process raw API JSON response')
+        elif config.PARSING_CONFIG.has_section('ParsingExplanations'):
+            if not merged_config.has_section('ParsingExplanations'):
+                merged_config.add_section('ParsingExplanations')
+            for key, value in config.PARSING_CONFIG.items('ParsingExplanations'):
+                merged_config.set('ParsingExplanations', key, value)
+                
+        # Now write the merged config
         with open(config_file, "w", encoding="utf-8") as f:
-            cp.write(f)
+            merged_config.write(f)
+        
+        # IMPORTANT: Create new ConfigParser objects and reload from the file
+        # This ensures we get exactly what was saved, not hardcoded values
+        
+        if hasattr(config, "CONFIG"):
+            # Create a fresh ConfigParser with the same settings
+            new_config = configparser.ConfigParser()
+            new_config.optionxform = str  # Preserve case sensitivity
+            new_config.read(config_file)
+            
+            # Replace the entire CONFIG object
+            config.CONFIG = new_config
+        
+        if hasattr(config, "PARSING_CONFIG"):
+            # Create a fresh ConfigParser with the same settings
+            new_parsing_config = configparser.ConfigParser()
+            new_parsing_config.optionxform = str  # Preserve case sensitivity
+            new_parsing_config.read(config_file)
+            
+            # Replace the entire PARSING_CONFIG object
+            config.PARSING_CONFIG = new_parsing_config
+            
+            # Debug output to verify correct sections were loaded
+            print(f"Parsing sections after reload: {new_parsing_config.sections()}")
+            if new_parsing_config.has_section('Parsing'):
+                print(f"Loaded parsing methods: {dict(new_parsing_config.items('Parsing'))}")
+        
+        # Reload any specific config values that are stored as module-level variables
+        if hasattr(config, "experimentId") and config.CONFIG.has_option("API", "experimentId"):
+            config.experimentId = config.CONFIG.get("API", "experimentId")
+        
         messagebox.showinfo("Configuration", "Configuration saved successfully.")
         config_win.destroy()
-
+    
+    # Create and add the Save and Cancel buttons to the bottom_frame
     save_button = ttk.Button(bottom_frame, text="Save", command=save_config, width=10)
     save_button.pack(side=tk.LEFT, padx=10)
+    
     cancel_button = ttk.Button(bottom_frame, text="Cancel", command=config_win.destroy, width=10)
     cancel_button.pack(side=tk.LEFT, padx=10)
-
-    config_win.transient(root)
-    config_win.grab_set()
 
 def start_new_job(main_window):
     print("JOBS_DICT KEYS:", list(jobs_dict.keys()))
@@ -467,13 +563,13 @@ def prompt_for_input_file(root):
     dialog.grab_set()
     content_frame = tk.Frame(dialog)
     content_frame.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
-    label = tk.Label(content_frame, text="Please choose an input JSON file:")
+    label = tk.Label(content_frame, text="Please choose an input file (json or txt):")
     label.pack(pady=10)
     selected_file = {"file": ""}
     def browse():
         file_path = filedialog.askopenfilename(
             title="Select Input JSON File",
-            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+            filetypes=[("json Files", "*.json"), ("text Files", "*.txt"), ("All Files", "*.*")]
         )
         if file_path:
             selected_file["file"] = file_path
@@ -654,9 +750,9 @@ def tk_ui_main():
     control_frame.grid(row=0, column=1, sticky="ns", padx=5)
     new_job_button = ttk.Button(control_frame, text="New Job", command=lambda: start_new_job(root))
     new_job_button.pack(pady=2, fill=tk.X)
-    stop_all_button = ttk.Button(control_frame, text="Stop All Jobs", command=stop_all_jobs)
+    stop_all_button = ttk.Button(control_frame, text="Pause All Jos", command=stop_all_jobs)
     stop_all_button.pack(pady=2, fill=tk.X)
-    clear_all_button = ttk.Button(control_frame, text="Clear All Jobs", command=clear_all_jobs)
+    clear_all_button = ttk.Button(control_frame, text="Delete All Jobs", command=clear_all_jobs)
     clear_all_button.pack(pady=2, fill=tk.X)
     chat_button = ttk.Button(control_frame, text="Chat", command=lambda: open_chat_from_button(root, chat_button))
     chat_button.pack(pady=2, fill=tk.X)
@@ -687,12 +783,16 @@ def tk_ui_main():
                 elapsed_str = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
                 ui["elapsed_time_label"].config(text=f"Elapsed time: {elapsed_str}")
             # Update button states based on job.status.
-            if job.status != "running":
-                ui["cancel_button"].config(state=tk.DISABLED)
-                ui["resume_button"].config(state=tk.NORMAL)
-            else:
+            if job.status == "running":
                 ui["cancel_button"].config(state=tk.NORMAL)
                 ui["resume_button"].config(state=tk.DISABLED)
+            elif job.status == "finished":
+                # If job is finished, disable both buttons
+                ui["cancel_button"].config(state=tk.DISABLED)
+                ui["resume_button"].config(state=tk.DISABLED)
+            else:  # stopped, paused, etc.
+                ui["cancel_button"].config(state=tk.DISABLED)
+                ui["resume_button"].config(state=tk.NORMAL)
             if not ui.get("last_log_index"):
                 ui["last_log_index"] = 0
             new_entries = job.logs[ui["last_log_index"]:]
