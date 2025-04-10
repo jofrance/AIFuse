@@ -14,6 +14,7 @@ from log_config import logger
 import itertools
 import time
 import configparser  # For configuration editing
+import uuid  # For generating unique job IDs
 
 # Global dictionary to manage jobs: job_id -> Job object
 jobs_dict = {}
@@ -22,6 +23,8 @@ jobs_dict = {}
 job_list_tree = None
 notebook = None
 chat_window = None  # For chat window tracking
+config_window = None
+config_button = None  # Add this line to declare config_button globally
 
 # Helper: Append part of the job_id to a generated filename to ensure uniqueness
 def unique_job_filename(input_file, experiment_id, basename, extension, job_id):
@@ -219,20 +222,31 @@ def save_job_results(job):
 
 def open_configuration_window(root):
     import configparser
+    global config_window, config_button  # Add global declarations
+    
+    # Check if window is already open
+    if config_window is not None and tk.Toplevel.winfo_exists(config_window):
+        config_window.lift()  # Bring to front if already open
+        return
+
+    fixed_width = 600
+    fixed_height = 400
     config_file = "config.ini"
     cp = configparser.ConfigParser()
     cp.optionxform = str  # Preserve key case
     cp.read(config_file)
 
-    # Create the configuration editor window.
-    config_win = tk.Toplevel(root)
-    config_win.title("Configuration Editor")
-    config_win.geometry("600x400")
-
+    # Create the configuration editor window - FIX THIS LINE
+    config_window = tk.Toplevel(root)  # Use the global variable directly
+    config_window.title("Configuration Editor")
+    # REMOVE THIS LINE: config_win = config_window  # This was overwriting the window with None
+    
+    config_button.config(state=tk.DISABLED)  # Disable the button while the window is open
+    
     # Create a Notebook to hold one tab per section.
-    nb = ttk.Notebook(config_win)
+    nb = ttk.Notebook(config_window)  # Use config_window consistently
     nb.pack(fill=tk.BOTH, expand=True)
-
+    
     # Dictionary to store widgets for each (section, key)
     # For experiments, we'll store a tuple: (label, entry, remove_button)
     entries = {}
@@ -271,43 +285,82 @@ def open_configuration_window(root):
             add_button_frame = tk.Frame(frame)
             add_button_frame.grid(row=row, column=0, columnspan=3, pady=10, sticky="ew")
             def add_experiment(sec=section, frame=frame, btn_frame=add_button_frame):
-                add_win = tk.Toplevel(config_win)
+                fixed_width = 420
+                fixed_height = 150
+                
+                add_win = tk.Toplevel(config_window)
                 add_win.title("Add New Experiment")
-                add_win.geometry("300x150")
+                add_win.geometry(f"{fixed_width}x{fixed_height}")
+                add_win.resizable(False, False)
+                
                 tk.Label(add_win, text="Experiment Friendly Name:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
                 name_entry = tk.Entry(add_win, width=30)
                 name_entry.grid(row=0, column=1, padx=5, pady=5)
                 tk.Label(add_win, text="Experiment ID:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
                 id_entry = tk.Entry(add_win, width=30)
                 id_entry.grid(row=1, column=1, padx=5, pady=5)
+                
                 # Button frame for Add/Cancel in dialog
                 dialog_btn_frame = tk.Frame(add_win)
                 dialog_btn_frame.grid(row=2, column=0, columnspan=2, pady=10)
+                
                 def add_and_close():
-                    friendly_name = name_entry.get().strip()
+                    # Get values from entries
+                    name = name_entry.get().strip()
                     exp_id = id_entry.get().strip()
-                    if friendly_name and exp_id:
-                        # Insert the new experiment above the add button frame.
-                        # Get current row of the add button frame.
-                        current_rows = btn_frame.grid_info().get("row", row)
-                        # Insert new widgets at that row.
-                        new_label = tk.Label(frame, text=friendly_name)
-                        new_label.grid(row=current_rows, column=0, padx=5, pady=5, sticky="w")
-                        new_entry = tk.Entry(frame, width=50)
-                        new_entry.insert(0, exp_id)
-                        new_entry.grid(row=current_rows, column=1, padx=5, pady=5, sticky="w")
-                        new_remove = ttk.Button(frame, text="Remove", width=10)
-                        new_remove.config(command=lambda s=sec, k=friendly_name, lbl=new_label, ent=new_entry, rb=new_remove: remove_experiment_item(s, k, lbl, ent, rb))
-                        new_remove.grid(row=current_rows, column=2, padx=5, pady=5)
-                        entries[(sec, friendly_name)] = (new_label, new_entry, new_remove)
-                        # Move the add button frame one row down.
-                        btn_frame.grid_configure(row=current_rows+1)
+                    
+                    # Validate both fields are filled
+                    if not name or not exp_id:
+                        messagebox.showerror("Error", "Both name and ID must be provided.", parent=add_win)
+                        return
+                    
+                    # Add to config parser
+                    cp.set(sec, name, exp_id)
+                    
+                    # Add to UI
+                    row_count = len([k for s, k in entries.keys() if s == sec])
+                    
+                    # Create widgets for the new row
+                    name_label = tk.Label(frame, text=name)
+                    name_label.grid(row=row_count, column=0, padx=5, pady=5, sticky="w")
+                    
+                    entry = tk.Entry(frame, width=50)
+                    entry.insert(0, exp_id)
+                    entry.grid(row=row_count, column=1, padx=5, pady=5, sticky="w")
+                    
+                    remove_btn = ttk.Button(frame, text="Remove", width=10)
+                    remove_btn.grid(row=row_count, column=2, padx=5, pady=5)
+                    
+                    # Configure remove button
+                    remove_btn.config(command=lambda s=sec, k=name, lbl=name_label, 
+                                       ent=entry, rb=remove_btn: 
+                                       remove_experiment_item(s, k, lbl, ent, rb))
+                    
+                    # Add to entries dictionary
+                    entries[(sec, name)] = (name_label, entry, remove_btn)
+                    
+                    # Move the Add Experiment button frame down to the row after the new experiment
+                    btn_frame.grid_forget()
+                    btn_frame.grid(row=row_count + 1, column=0, columnspan=3, pady=10, sticky="ew")
+                    
+                    # Close dialog
                     add_win.destroy()
+                
                 add_btn = ttk.Button(dialog_btn_frame, text="Add", command=add_and_close, width=10)
                 add_btn.pack(side=tk.LEFT, padx=10)
                 cancel_btn = ttk.Button(dialog_btn_frame, text="Cancel", command=add_win.destroy, width=10)
                 cancel_btn.pack(side=tk.LEFT, padx=10)
-                add_win.transient(config_win)
+                
+                # Center the dialog on screen
+                add_win.update_idletasks()
+                screen_width = add_win.winfo_screenwidth()
+                screen_height = add_win.winfo_screenheight()
+                x = (screen_width // 2) - (fixed_width // 2)
+                y = (screen_height // 2) - (fixed_height // 2)
+                add_win.geometry(f"{fixed_width}x{fixed_height}+{x}+{y}")
+                
+                # Make it a modal dialog
+                add_win.transient(config_window)
                 add_win.grab_set()
             add_exp_button = ttk.Button(add_button_frame, text="Add Experiment", command=add_experiment, width=15)
             add_exp_button.pack(padx=5, pady=5)  # Remove fill=tk.X to avoid stretching
@@ -322,7 +375,7 @@ def open_configuration_window(root):
                 row += 1
 
     # Bottom frame for Save and Cancel buttons.
-    bottom_frame = tk.Frame(config_win)
+    bottom_frame = tk.Frame(config_window)  # Use config_window consistently
     bottom_frame.pack(side=tk.BOTTOM, pady=10)
 
     def save_config():
@@ -429,14 +482,46 @@ def open_configuration_window(root):
             config.experimentId = config.CONFIG.get("API", "experimentId")
         
         messagebox.showinfo("Configuration", "Configuration saved successfully.")
-        config_win.destroy()
+        config_window.destroy()
     
     # Create and add the Save and Cancel buttons to the bottom_frame
     save_button = ttk.Button(bottom_frame, text="Save", command=save_config, width=10)
     save_button.pack(side=tk.LEFT, padx=10)
     
-    cancel_button = ttk.Button(bottom_frame, text="Cancel", command=config_win.destroy, width=10)
+    cancel_button = ttk.Button(bottom_frame, text="Cancel", command=config_window.destroy, width=10)
     cancel_button.pack(side=tk.LEFT, padx=10)
+    
+    def on_config_window_close():
+        global config_window  # Move to beginning of function
+        config_button.config(state=tk.NORMAL)
+        config_window = None
+    
+    config_window.protocol("WM_DELETE_WINDOW", on_config_window_close)
+    
+    # Update save and cancel button functions to re-enable the config button
+    def save_config_wrapped():
+        global config_window  # Move to beginning of function
+        save_config()
+        config_button.config(state=tk.NORMAL)
+        config_window = None
+    
+    def cancel_wrapped():
+        global config_window  # Move to beginning of function
+        config_window.destroy()
+        config_button.config(state=tk.NORMAL)
+        config_window = None
+    
+    # Replace the original button commands
+    save_button.config(command=save_config_wrapped)
+    cancel_button.config(command=cancel_wrapped)
+    
+    # Center the configuration window on screen
+    config_window.update_idletasks()
+    screen_width = config_window.winfo_screenwidth()
+    screen_height = config_window.winfo_screenheight()
+    x = (screen_width // 2) - (fixed_width // 2)
+    y = (screen_height // 2) - (fixed_height // 2)
+    config_window.geometry(f"{fixed_width}x{fixed_height}+{x}+{y}")
 
 def start_new_job(main_window):
     print("JOBS_DICT KEYS:", list(jobs_dict.keys()))
@@ -459,14 +544,29 @@ def start_new_job(main_window):
         messagebox.showinfo("Cancelled", "Parsing method selection cancelled. Job not started.", parent=main_window)
         return
     logger.info("Experiment Parsing:" + selected_parsing)
-    job = Job(file_selected, experiment_id)
+    
+    # Add processing settings dialog
+    processing_settings = show_processing_settings_dialog(main_window)
+    if not processing_settings:
+        return  # User canceled
+    
+    # Create job with processing settings
+    job = Job(
+        job_id=str(uuid.uuid4()),
+        input_file=file_selected,
+        experiment_id=experiment_id,
+        experiment_name=selected_experiment,
+        parsing_method=selected_parsing,
+        threads=processing_settings["threads"],
+        batch_size=processing_settings["batch_size"]
+    )
+    
     job.processed_tracking_file = unique_job_filename(job.input_file, job.experiment_id, "processed", "txt", job.job_id)
     job.api_401_tracking_file = unique_job_filename(job.input_file, job.experiment_id, "401", "txt", job.job_id)
     job.raw_output_file = unique_job_filename(job.input_file, job.experiment_id, "APIResponseRaw", "csv", job.job_id)
     job.api_response_file = unique_job_filename(job.input_file, job.experiment_id, "APIResponse", "csv", job.job_id)
     job.api_error_log_file = unique_job_filename(job.input_file, job.experiment_id, "APIError", "log", job.job_id)
     job.script_error_log_file = unique_job_filename(job.input_file, job.experiment_id, "ScriptError", "log", job.job_id)
-    job.parsing_method = selected_parsing
     if job.parsing_method.upper() == "TXT":
         job.log("Plain Text consolidation Selected.")
         job.consolidated_txt = unique_job_filename(job.input_file, job.experiment_id, "Consolidated_Output", "txt", job.job_id)
@@ -712,11 +812,105 @@ def prompt_for_parsing_method(root):
     dialog.wait_window()
     return result["parsing"]
 
+def show_processing_settings_dialog(parent):
+    """Show dialog for configuring processing settings (threading/batching)"""
+    fixed_width = 400
+    fixed_height = 300
+    
+    dialog = tk.Toplevel(parent)
+    dialog.title("Processing Settings")
+    dialog.geometry(f"{fixed_width}x{fixed_height}")
+    dialog.resizable(False, False)
+    dialog.transient(parent)
+    dialog.grab_set()
 
+    # Container frame
+    main_frame = ttk.Frame(dialog, padding="10")
+    main_frame.pack(fill=tk.BOTH, expand=True)
 
+    # Threading settings
+    thread_frame = ttk.LabelFrame(main_frame, text="Threading Settings")
+    thread_frame.pack(fill=tk.X, pady=(0, 10))
 
+    thread_enabled = tk.BooleanVar(value=False)
+    ttk.Checkbutton(thread_frame, text="Enable threading", variable=thread_enabled).pack(anchor=tk.W, padx=5, pady=5)
+
+    thread_count_frame = ttk.Frame(thread_frame)
+    thread_count_frame.pack(fill=tk.X, padx=5, pady=5)
+    ttk.Label(thread_count_frame, text="Number of threads:").pack(side=tk.LEFT)
+    
+    thread_count = tk.IntVar(value=4)
+    thread_spinner = ttk.Spinbox(thread_count_frame, from_=1, to=32, textvariable=thread_count, width=5, state="disabled")
+    thread_spinner.pack(side=tk.LEFT, padx=5)
+
+    # Enable/disable thread count spinner based on checkbox
+    def toggle_thread_spinner(*args):
+        thread_spinner.configure(state="normal" if thread_enabled.get() else "disabled")
+    thread_enabled.trace_add("write", toggle_thread_spinner)
+
+    # Batching settings
+    batch_frame = ttk.LabelFrame(main_frame, text="Case Grouping Settings")
+    batch_frame.pack(fill=tk.X, pady=(0, 10))
+
+    batch_enabled = tk.BooleanVar(value=False)
+    ttk.Checkbutton(batch_frame, text="Enable case grouping (for thread efficiency)", variable=batch_enabled).pack(anchor=tk.W, padx=5, pady=5)
+
+    batch_size_frame = ttk.Frame(batch_frame)
+    batch_size_frame.pack(fill=tk.X, padx=5, pady=5)
+    ttk.Label(batch_size_frame, text="Group size:").pack(side=tk.LEFT)
+    
+    batch_size = tk.IntVar(value=10)
+    batch_spinner = ttk.Spinbox(batch_size_frame, from_=2, to=100, textvariable=batch_size, width=5, state="disabled")
+    batch_spinner.pack(side=tk.LEFT, padx=5)
+
+    # Enable/disable batch size spinner based on checkbox
+    def toggle_batch_spinner(*args):
+        batch_spinner.configure(state="normal" if batch_enabled.get() else "disabled")
+    batch_enabled.trace_add("write", toggle_batch_spinner)
+
+    # Help text
+    help_text = "Threading: Process multiple cases concurrently\nGrouping: Group cases into batches for processing on each thread" 
+    ttk.Label(main_frame, text=help_text, foreground="gray").pack(anchor=tk.W, pady=5)
+
+    # Buttons
+    button_frame = ttk.Frame(main_frame)
+    button_frame.pack(fill=tk.X, pady=10)
+
+    result = {"confirmed": False, "threads": 0, "batch_size": 0}
+
+    def on_confirm():
+        result["confirmed"] = True
+        result["threads"] = thread_count.get() if thread_enabled.get() else 0
+        result["batch_size"] = batch_size.get() if batch_enabled.get() else 0
+        dialog.destroy()
+
+    ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+    ttk.Button(button_frame, text="Confirm", command=on_confirm).pack(side=tk.RIGHT, padx=5)
+
+    # Center the dialog on screen
+    dialog.update_idletasks()
+    screen_width = dialog.winfo_screenwidth()
+    screen_height = dialog.winfo_screenheight()
+    x = (screen_width // 2) - (fixed_width // 2)
+    y = (screen_height // 2) - (fixed_height // 2)
+    dialog.geometry(f"{fixed_width}x{fixed_height}+{x}+{y}")
+
+    parent.wait_window(dialog)
+    return result if result["confirmed"] else None
+
+def show_job_details(job_id):
+        
+    # Add threading and batching info to details display
+    job = jobs_dict.get(job_id)
+    if job:
+        threading_text = f"Threading: {'Enabled (' + str(job.threads) + ' threads)' if job.threads > 0 else 'Disabled'}"
+        batching_text = f"Batching: {'Enabled (batch size: ' + str(job.batch_size) + ')' if job.batch_size > 0 else 'Disabled'}"
+        details += f"\n{threading_text}\n{batching_text}"
+    
+    
 def tk_ui_main():
-    global job_list_tree, notebook, chat_window
+    global job_list_tree, notebook, chat_window, config_button  # Include config_button here
+    
     # Load unfinished jobs from file
     loaded_jobs = load_all_jobs()
     if loaded_jobs:
@@ -746,21 +940,27 @@ def tk_ui_main():
     job_list_tree.heading("Experiment", text="Experiment")
     job_list_tree.heading("Status", text="Status")
     job_list_tree.grid(row=0, column=0, sticky="nsew")
+    
+    # Create the control frame
     control_frame = tk.Frame(top_frame)
     control_frame.grid(row=0, column=1, sticky="ns", padx=5)
+    
     new_job_button = ttk.Button(control_frame, text="New Job", command=lambda: start_new_job(root))
     new_job_button.pack(pady=2, fill=tk.X)
-    stop_all_button = ttk.Button(control_frame, text="Pause All Jos", command=stop_all_jobs)
+    stop_all_button = ttk.Button(control_frame, text="Pause All Jobs", command=stop_all_jobs)
     stop_all_button.pack(pady=2, fill=tk.X)
     clear_all_button = ttk.Button(control_frame, text="Delete All Jobs", command=clear_all_jobs)
     clear_all_button.pack(pady=2, fill=tk.X)
     chat_button = ttk.Button(control_frame, text="Chat", command=lambda: open_chat_from_button(root, chat_button))
     chat_button.pack(pady=2, fill=tk.X)
-    # New Configuration button
+    
+    # KEEP ONLY THIS ONE Configuration button
     config_button = ttk.Button(control_frame, text="Configuration", command=lambda: open_configuration_window(root))
     config_button.pack(pady=2, fill=tk.X)
+    
     quit_button = ttk.Button(control_frame, text="Quit", command=lambda: on_quit(root))
     quit_button.pack(pady=2, fill=tk.X)
+    
     notebook_frame = tk.Frame(main_frame)
     notebook_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
     notebook = ttk.Notebook(notebook_frame)
@@ -824,3 +1024,4 @@ def on_chat_close(window, chat_button):
 
 if __name__ == "__main__":
     tk_ui_main()
+

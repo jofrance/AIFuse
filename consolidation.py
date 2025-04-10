@@ -260,4 +260,23 @@ def consolidate_case_txt(job, case_number, original_line, api_output, error_mess
         with open(job.consolidated_txt, 'a', encoding='latin-1') as f:
             f.write(block)
 
+def write_api_response_csv_safe(job, case_number, response_data, header=None):
+    """Thread-safe function to write API response to CSV file"""
+    with job.api_response_lock:
+        # Check if file exists and needs header
+        file_exists = os.path.exists(job.api_response_file)
+        with open(job.api_response_file, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            # Write header if this is a new file
+            if not file_exists and header:
+                writer.writerow(header)
+            # Write data row
+            writer.writerow(response_data)
 
+def append_processing_detail(job, message):
+    """Thread-safe function to append to job logs"""
+    with job.logs_lock:  # Use the job's lock
+        job.logs.append(message)
+        # If running in UI mode, no need to print to console
+        if not hasattr(job, "ui") or job.ui is None:
+            print(message)

@@ -25,8 +25,9 @@ def load_processed_cases(job):
     return processed
 
 def update_processed_cases(job, case_number):
-    with open(job.processed_tracking_file, 'a') as f:
-        f.write(str(case_number) + "\n")
+    with job.tracking_file_lock:  # Use lock to ensure thread safety
+        with open(job.processed_tracking_file, 'a') as f:
+            f.write(str(case_number) + "\n")
 
 def load_401_errors(job):
     errors = set()
@@ -39,8 +40,9 @@ def load_401_errors(job):
     return errors
 
 def update_401_error(job, case_number, error_message):
-    with open(job.api_401_tracking_file, 'a') as f:
-        f.write(str(case_number) + "\n")
+    with job.api_401_lock:  # Use lock for thread safety
+        with open(job.api_401_tracking_file, 'a') as f:
+            f.write(str(case_number) + "\n")
     append_processing_detail(job, f"Case {case_number}: 401 error logged.")
 
 def clear_401_tracking_file(job):
@@ -129,27 +131,24 @@ def clear_output_files(job):
     logger.info("Output files cleared.")
     
 def log_api_error(job, message):
-    if job is not None:
-        print(f"[DEBUG] Writing error to file: {job.api_error_log_file}")
-    else:
-        print("[DEBUG] log_api_error called with job=None")
-    try:
-        with open(job.api_error_log_file, 'a') as file:
-            file.write(message + "\n")
-    except Exception as e:
-        print(f"[DEBUG] Exception when writing error: {e}")
-    append_processing_detail(job, message)
-    print(message, file=sys.stderr)
+    with job.error_file_lock:  # Make sure this is used
+        with open(job.api_error_log_file, 'a') as f:
+            f.write(f"{message}\n")
 
 def log_script_error(job, message):
-    with open(job.script_error_log_file, 'a') as file:
-        file.write(message + "\n")
-    append_processing_detail(job, message)
-    print(message, file=sys.stderr)
+    with job.script_error_lock:  # Make sure this is used
+        with open(job.script_error_log_file, 'a') as f:
+            f.write(f"{message}\n")
 
 def update_progress(job):
-    with config.progress_lock:
+    with job.progress_lock:
         job.progress_done += 1
+        job.cases_processed += 1
+        # Calculate percentage here if needed with the lock held
+        percentage = (job.progress_done / job.progress_total) * 100 if job.progress_total > 0 else 0
+    
+    # Update UI or log progress (can be outside the lock)
+    # ...
 
 def parse_input_file(file_name):
     import os, json
@@ -332,7 +331,11 @@ def processing_main():
 
     if use_threading and batching:
         total_batches = (len(cases) + batch_size - 1) // batch_size
-        append_processing_detail(None, f"Processing {len(cases)} cases in {total_batches} batches of size {batch_size}.")
+        #append_processing_detail(None, f"Processing {len(cases)} cases in {total_batches} batches of size {batch_size}.")
+        append_processing_detail(None,f"Processing {len(cases)} cases using {max_threads} threads with efficient grouping " +
+                f"(group size: {batch_size}, {total_batches} groups)")
+        # This mode creates one thread per group of cases, rather than one thread per case
+        # Each case still gets its own API call, but thread management is more efficient
         q = Queue()
         for i in range(0, len(cases), batch_size):
             q.put(cases[i:i + batch_size])
@@ -349,7 +352,7 @@ def processing_main():
     elif use_threading:
         sem = Semaphore(max_threads)
         thread_list = []
-        append_processing_detail(None, f"Processing {len(cases)} cases in threading mode with a maximum of {max_threads} threads.")
+        append_processing_detail(None, f"Processing {len(cases)} cases with individual threads max of {max_threads} threads.")
         for case_number, original_data in cases:
             sem.acquire()
             t = threading.Thread(target=lambda c=case_number, d=original_data: (call_experiment_api(c, d), sem.release()))
@@ -359,7 +362,7 @@ def processing_main():
             t.join()
     elif batching:
         total_batches = (len(cases) + batch_size - 1) // batch_size
-        append_processing_detail(None, f"Processing {len(cases)} cases in {total_batches} batches of size {batch_size}.")
+        append_processing_detail(None, f"Processing {len(cases)} cases in {total_batches} sequential groups " +  f"(group size: {batch_size})")
         for i in range(0, len(cases), batch_size):
             process_batch(cases[i:i + batch_size])
     else:
@@ -374,6 +377,12 @@ def processing_main():
 
 # --- Job-Specific Processing Loop ---
 def processing_main_job(job):
+    # Ensure threads and batch_size have defaults if not present
+    if not hasattr(job, 'threads'):
+        job.threads = 0
+    if not hasattr(job, 'batch_size'):
+        job.batch_size = 0
+        
     # ——— ISOLATE PER-JOB STATE ———
     job.api_header = None
     job.processing_details = []
@@ -394,10 +403,11 @@ def processing_main_job(job):
         job.log("Resuming processing using previous outputs.")
     
     file_name = job.input_file
-    use_threading = config.ARGS.threads > 0
-    max_threads = config.ARGS.threads if use_threading else None
-    batching = config.ARGS.batch > 0
-    batch_size = config.ARGS.batch if batching else None
+    # Use job-specific threading and batching settings instead of global config
+    use_threading = job.threads > 0
+    max_threads = job.threads if use_threading else None
+    batching = job.batch_size > 0
+    batch_size = job.batch_size if batching else None
 
     cases = parse_input_file(file_name)
     if job.resume_mode:
@@ -432,7 +442,7 @@ def processing_main_job(job):
 
     if use_threading and batching:
         total_batches = (len(cases) + batch_size - 1) // batch_size
-        job.log(f"Processing {len(cases)} cases in {total_batches} batches of size {batch_size}.")
+        job.log(f"Processing {len(cases)} cases in {total_batches} batches of size {batch_size} using {max_threads} threads in parallel.")
         q = Queue()
         for i in range(0, len(cases), batch_size):
             q.put(cases[i:i + batch_size])
@@ -485,9 +495,15 @@ def processing_main_job(job):
     token_thread.join()
 
 def process_batch_job(job, batch):
+    """Process a group of cases sequentially.
+    
+    This function processes each case in the group with its own individual API call.
+    The grouping is for thread management efficiency, not for sending multiple cases
+    in a single API call.
+    """
     for case_number, original_data in batch:
         if job.cancel_event.is_set():
-            job.log("Job cancellation requested inside batch.")
+            job.log("Job cancellation requested inside group.")
             break
         call_experiment_api_job(job, case_number, original_data)
 
@@ -657,3 +673,10 @@ def call_experiment_api_job(job, case_number, original_data):
 
     update_progress(job)
     update_processed_cases(job, case_number)
+
+def write_raw_output(job, case_number, data):
+    with job.raw_output_lock:
+        with open(job.raw_output_file, 'a', encoding='utf-8') as f:
+            f.write(f"Case {case_number}:\n")
+            f.write(data)
+            f.write("\n\n")

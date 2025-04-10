@@ -7,10 +7,14 @@ import config
 import time
 
 class Job:
-    def __init__(self, input_file, experiment_id):
-        self.job_id = str(uuid.uuid4())
+    def __init__(self, job_id=None, input_file=None, experiment_id=None, experiment_name=None, parsing_method=None, threads=0, batch_size=0):
+        self.job_id = job_id or str(uuid.uuid4())
         self.input_file = input_file
         self.experiment_id = experiment_id
+        self.experiment_name = experiment_name
+        self.parsing_method = parsing_method
+        self.threads = threads  # Add thread count parameter
+        self.batch_size = batch_size  # Add batch size parameter
         self.cancel_event = threading.Event()
         self.status = "running"  # possible values: running, paused, finished, cancelled
         self.progress_total = 0
@@ -43,8 +47,18 @@ class Job:
         self.ui = {}
 
         # New attributes for resumption
-        self.parsing_method = "CSV"    # Default to CSV if not set externally
         self.start_time = time.time()  # When the job started
+        
+        # Add file locks for thread safety
+        self.tracking_file_lock = threading.Lock()        # For processed_tracking_file
+        self.error_file_lock = threading.Lock()           # For api_error_log_file
+        self.api_response_lock = threading.Lock()         # For api_response_file
+        self.raw_output_lock = threading.Lock()           # For raw_output_file
+        self.script_error_lock = threading.Lock()         # For script_error_log_file
+        self.api_401_lock = threading.Lock()              # For api_401_tracking_file
+        self.logs_lock = threading.Lock()  # Add this new lock for logs
+        self.progress_lock = threading.Lock()  # Add this new lock
+
 
     def log(self, message):
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -52,11 +66,14 @@ class Job:
         self.logs.append(log_entry)
 
     def to_dict(self):
-        # Convert the job state to a dictionary for persistence.
         return {
-            "job_id": self.job_id,
-            "input_file": self.input_file,
-            "experiment_id": self.experiment_id,
+            'job_id': self.job_id,
+            'input_file': self.input_file,
+            'experiment_id': self.experiment_id,
+            'experiment_name': self.experiment_name,
+            'parsing_method': self.parsing_method,
+            'threads': self.threads,
+            'batch_size': self.batch_size,
             "status": self.status,
             "progress_total": self.progress_total,
             "progress_done": self.progress_done,
@@ -73,7 +90,6 @@ class Job:
             "consolidated_excel": self.consolidated_excel,
             "consolidated_txt": self.consolidated_txt,
             # Additional state for resumption
-            "parsing_method": self.parsing_method,
             "start_time": self.start_time,
             "resume_mode": self.resume_mode,
             "retry_401_flag": self.retry_401_flag
@@ -81,8 +97,15 @@ class Job:
 
     @classmethod
     def from_dict(cls, data):
-        job = cls(data["input_file"], data["experiment_id"])
-        job.job_id = data["job_id"]
+        job = cls(
+            job_id=data.get('job_id'),
+            input_file=data.get('input_file'),
+            experiment_id=data.get('experiment_id'),
+            experiment_name=data.get('experiment_name'),
+            parsing_method=data.get('parsing_method'),
+            threads=data.get('threads', 0),  # Default to 0 if not present (backward compatibility)
+            batch_size=data.get('batch_size', 0)  # Default to 0 if not present
+        )
         job.status = data["status"]
         job.progress_total = data["progress_total"]
         job.progress_done = data["progress_done"]
@@ -100,7 +123,6 @@ class Job:
         # Reinitialize threading event (do not persist the event object)
         job.cancel_event = threading.Event()
         # Restore additional state; if not found, assign default values.
-        job.parsing_method = data.get("parsing_method", "CSV")
         job.start_time = data.get("start_time", time.time())
         job.resume_mode = data.get("resume_mode", False)
         job.retry_401_flag = data.get("retry_401_flag", False)
@@ -139,3 +161,17 @@ def clear_job_state(job_id):
     file_path = os.path.join(JOBS_STATE_DIR, f"{job_id}.json")
     if os.path.exists(file_path):
         os.remove(file_path)
+
+def load_job(job_id):
+    file_path = os.path.join(JOBS_STATE_DIR, f"{job_id}.json")
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="latin-1") as f:
+            data = json.load(f)
+            job = Job.from_dict(data)
+            # Ensure threads and batch_size have defaults if not present
+            if not hasattr(job, 'threads'):
+                job.threads = 0
+            if not hasattr(job, 'batch_size'):
+                job.batch_size = 0
+            return job
+    return None
